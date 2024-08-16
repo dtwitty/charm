@@ -1,5 +1,6 @@
 use crate::raft::types::*;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
     AppendEntriesRequest(AppendEntriesRequest),
     AppendEntriesResponse(AppendEntriesResponse),
@@ -30,11 +31,17 @@ pub struct AppendEntriesRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppendEntriesResponse {
+    /// The id of the responding node.
+    pub node_id: NodeId,
+
     /// The current term of the responding server, for the leader to update itself.
     pub term: Term,
 
     /// True if the follower contained an entry matching `prev_log_index` and `prev_log_term`.
     pub success: bool,
+
+    /// The index of the last log entry.
+    pub last_log_index: Index,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +61,9 @@ pub struct RequestVoteRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestVoteResponse {
+    /// The id of the responding node.
+    pub node_id: NodeId,
+
     /// The current term of the responding server, for candidate to update itself.
     pub term: Term,
 

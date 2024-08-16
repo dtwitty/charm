@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
+use crate::raft::events::Timer;
 use crate::raft::messages::*;
-use crate::raft::network::Network;
 use crate::raft::node::Role::*;
+use crate::raft::raft_driver::RaftDriver;
 use crate::raft::types::*;
 
 struct Log {
@@ -63,14 +64,16 @@ struct CandidateState {
     votes_received: u64,
 }
 
-struct LeaderState {
-    /// For each server, index of the next log entry to send to that server.
-    /// Initialized to leader's last log index + 1.
-    next_index: HashMap<NodeId, Index>,
+struct PeerState {
+    /// The index of the next log entry to send to that server.
+    next_index: Index,
 
-    /// For each server, index of the highest log entry known to be replicated on server.
-    /// Initialized to 0, increases monotonically.
-    match_index: HashMap<NodeId, Index>,
+    /// The index of the highest log entry known to be replicated on server.
+    match_index: Index,
+}
+
+struct LeaderState {
+    peer_states: HashMap<NodeId, PeerState>,
 }
 
 enum Role {
@@ -79,8 +82,7 @@ enum Role {
     Leader(LeaderState),
 }
 
-
-struct RaftNode<N> {
+struct RaftNode<D> {
     /// The unique identifier of this node.
     node_id: NodeId,
 
@@ -105,11 +107,13 @@ struct RaftNode<N> {
     /// If this node is not a leader, this field is `None`.
     role: Role,
 
-    network: N,
+    /// The interface to the outside world.
+    /// This is used to send messages and set timers.
+    driver: D,
 }
 
-impl<N: Network> RaftNode<N> {
-    fn new(node_id: NodeId, network: N) -> RaftNode<N> {
+impl<D: RaftDriver> RaftNode<D> {
+    fn new(node_id: NodeId, driver: D) -> RaftNode<D> {
         RaftNode {
             node_id,
             current_term: Term(0),
@@ -118,7 +122,14 @@ impl<N: Network> RaftNode<N> {
             commit_index: Index(0),
             last_applied: Index(0),
             role: Follower,
-            network,
+            driver,
+        }
+    }
+
+    fn handle_timer(&mut self, timer: Timer) {
+        match timer {
+            Timer::ElectionTimeout => self.handle_election_timeout(),
+            Timer::HeartbeatTimeout => self.handle_heartbeat_timeout(),
         }
     }
 
@@ -168,15 +179,46 @@ impl<N: Network> RaftNode<N> {
 
     fn send_append_entries_response(&self, leader_id: &NodeId, success: bool) {
         let res = AppendEntriesResponse {
+            node_id: self.node_id.clone(),
             term: self.current_term,
             success,
+            last_log_index: self.log.last_index(),
         };
-        self.network.send(leader_id, &Message::AppendEntriesResponse(res));
+        self.driver.send(leader_id, &Message::AppendEntriesResponse(res));
     }
 
 
     fn handle_append_entries_response(&mut self, res: AppendEntriesResponse) {
         self.check_incoming_term(res.term);
+
+        // If we are not the leader, we don't care about these responses.
+        if let Leader(ref mut leader_state) = self.role {
+            if res.success {
+                let peer_state = self.get_mut_peer_state(&res.node_id);
+                peer_state.match_index = res.last_log_index;
+                peer_state.next_index = res.last_log_index.next();
+            } else {
+                // The AppendEntriesRequest failed. Decrement the next_index. We will retry later.
+                let peer_state = self.get_mut_peer_state(&res.node_id);
+                peer_state.next_index = peer_state.next_index.prev();
+            }
+        }
+    }
+
+    fn get_mut_peer_state(&mut self, node_id: &NodeId) -> &mut PeerState {
+        if let Leader(ref mut leader_state) = self.role {
+            leader_state.peer_states.get_mut(node_id).expect("peer state not found")
+        } else {
+            panic!("not a leader")
+        }
+    }
+
+    fn get_peer_state(&self, node_id: &NodeId) -> &PeerState {
+        if let Leader(ref leader_state) = self.role {
+            leader_state.peer_states.get(node_id).expect("peer state not found")
+        } else {
+            panic!("not a leader")
+        }
     }
 
     fn handle_request_vote_request(&mut self, req: RequestVoteRequest) {
@@ -218,20 +260,22 @@ impl<N: Network> RaftNode<N> {
 
     fn send_failed_vote_response(&self, candidate_id: &NodeId) {
         let res = RequestVoteResponse {
+            node_id: self.node_id.clone(),
             term: self.current_term,
             vote_granted: false,
         };
-        self.network.send(candidate_id, &Message::RequestVoteResponse(res));
+        self.driver.send(candidate_id, &Message::RequestVoteResponse(res));
     }
 
     fn vote_for(&mut self, candidate_id: &NodeId) {
         self.voted_for = Some(candidate_id.clone());
         self.role = Follower;
         let res = RequestVoteResponse {
+            node_id: self.node_id.clone(),
             term: self.current_term,
             vote_granted: true,
         };
-        self.network.send(candidate_id, &Message::RequestVoteResponse(res));
+        self.driver.send(candidate_id, &Message::RequestVoteResponse(res));
     }
 
     fn handle_request_vote_response(&mut self, res: RequestVoteResponse) {
@@ -247,7 +291,7 @@ impl<N: Network> RaftNode<N> {
                 } else if res.vote_granted {
                     state.votes_received += 1;
 
-                    let majority_votes = (self.network.num_nodes() / 2) as u64 + 1;
+                    let majority_votes = (self.driver.num_nodes() / 2) as u64 + 1;
                     if state.votes_received > majority_votes {
                         // Great success!
                         self.become_leader();
@@ -262,22 +306,22 @@ impl<N: Network> RaftNode<N> {
     }
 
     fn become_leader(&mut self) {
-        let mut next_index = HashMap::new();
-        let mut match_index = HashMap::new();
+        let mut peer_states = HashMap::new();
 
-        for node_id in self.network.nodes() {
-            next_index.insert(node_id.clone(), self.log.last_index().next());
-            match_index.insert(node_id.clone(), Index(0));
+        for node_id in self.driver.nodes() {
+            let next_index = self.log.last_index().next();
+            let match_index = Index(0);
+            peer_states.insert(node_id.clone(), PeerState { next_index, match_index });
         }
 
-        self.role = Leader(LeaderState { next_index, match_index });
+        self.role = Leader(LeaderState { peer_states });
 
         // Send initial empty AppendEntriesRequests to all nodes.
         self.broadcast_heartbeat();
     }
 
     fn broadcast_heartbeat(&self) {
-        for node_id in self.network.nodes() {
+        for node_id in self.driver.nodes() {
             self.heartbeat_node(node_id);
         }
     }
@@ -286,9 +330,17 @@ impl<N: Network> RaftNode<N> {
         self.send_append_entries(node_id, vec![]);
     }
 
+    fn append_outstanding_entries(&self, node_id: &NodeId) {
+        for node_id in self.driver.nodes() {
+            let entries = self.get_outstanding_entries(node_id);
+            self.send_append_entries(node_id, entries);
+        }
+    }
+
     fn send_append_entries(&self, node_id: &NodeId, entries: Vec<LogEntry>) {
         if let Leader(ref leader_state) = self.role {
-            let next_index = leader_state.next_index.get(node_id).expect(format!("next_index not found for node {}", node_id).as_str());
+            let peer_state = self.get_peer_state(node_id);
+            let next_index = peer_state.next_index;
             let prev_log_index = next_index.prev();
             let prev_log_term = self.log.get(prev_log_index).map(|entry| entry.term).expect("prev_log_index should exist");
 
@@ -303,7 +355,17 @@ impl<N: Network> RaftNode<N> {
                 leader_commit: self.commit_index,
             };
 
-            self.network.send(node_id, &Message::AppendEntriesRequest(req));
+            self.driver.send(node_id, &Message::AppendEntriesRequest(req));
+        }
+    }
+
+    fn get_outstanding_entries(&self, node_id: &NodeId) -> Vec<LogEntry> {
+        if let Leader(ref leader_state) = self.role {
+            let peer_state = self.get_peer_state(node_id);
+            let next_index = peer_state.next_index;
+            self.log.entries[next_index.0 as usize..].to_vec()
+        } else {
+            panic!("not a leader");
         }
     }
 
@@ -318,5 +380,35 @@ impl<N: Network> RaftNode<N> {
     fn convert_to_follower(&mut self) {
         self.voted_for = None;
         self.role = Follower;
+    }
+
+    fn handle_election_timeout(&mut self) {
+        // Enter the next term.
+        self.current_term = self.current_term.next();
+
+        // Vote for ourselves.
+        self.voted_for = Some(self.node_id.clone());
+
+        // Become a candidate.
+        self.role = Candidate(CandidateState { votes_received: 1 });
+
+        // Send RequestVoteRequests to all nodes.
+        let req = RequestVoteRequest {
+            term: self.current_term,
+            candidate_id: self.node_id.clone(),
+            last_log_index: self.log.last_index(),
+            last_log_term: self.log.last_log_term(),
+        };
+
+        for node_id in self.driver.nodes() {
+            self.driver.send(&node_id, &Message::RequestVoteRequest(req.clone()));
+        }
+    }
+
+    fn handle_heartbeat_timeout(&mut self) {
+        /// We only do anything if we are the leader.
+        if let Leader(_) = self.role {
+            self.append_outstanding_entries(&self.node_id);
+        }
     }
 }
