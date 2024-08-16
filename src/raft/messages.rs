@@ -19,7 +19,7 @@ pub struct AppendEntriesRequest {
     pub prev_log_index: Index,
 
     /// The term of the entry at `prev_log_index`.
-    pub prev_log_term: Index,
+    pub prev_log_term: Term,
 
     /// The new log entries to append.
     pub entries: Vec<LogEntry>,
