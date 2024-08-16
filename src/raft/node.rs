@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use crate::raft::events::Timer;
+use tracing::{debug, info, warn};
+
 use crate::raft::messages::*;
 use crate::raft::node::Role::*;
 use crate::raft::raft_driver::RaftDriver;
@@ -24,6 +25,7 @@ impl Log {
                 Some(existing_entry) => {
                     if existing_entry.term != entry.term {
                         // Remove all entries from here on.
+                        warn!("Removing conflicting entries from index {:?}.", index);
                         self.entries.truncate(index.0 as usize - 1);
 
                         self.entries.push(entry);
@@ -113,7 +115,7 @@ struct RaftNode<D> {
 }
 
 impl<D: RaftDriver> RaftNode<D> {
-    fn new(node_id: NodeId, driver: D) -> RaftNode<D> {
+    pub fn new(node_id: NodeId, driver: D) -> RaftNode<D> {
         RaftNode {
             node_id,
             current_term: Term(0),
@@ -126,58 +128,50 @@ impl<D: RaftDriver> RaftNode<D> {
         }
     }
 
-    fn handle_timer(&mut self, timer: Timer) {
-        match timer {
-            Timer::ElectionTimeout => self.handle_election_timeout(),
-            Timer::HeartbeatTimeout => self.handle_heartbeat_timeout(),
-        }
-    }
-
-    fn handle_message(&mut self, m: Message) {
-        match m {
-            Message::AppendEntriesRequest(req) => self.handle_append_entries_request(req),
-            Message::AppendEntriesResponse(res) => self.handle_append_entries_response(res),
-            Message::RequestVoteRequest(req) => self.handle_request_vote_request(req),
-            Message::RequestVoteResponse(res) => self.handle_request_vote_response(res),
-        }
-    }
-
-    fn handle_append_entries_request(&mut self, req: AppendEntriesRequest) {
+    pub fn handle_append_entries_request(&mut self, req: AppendEntriesRequest) {
+        debug!("Received AppendEntriesRequest: {:?}", req);
         self.check_incoming_term(req.term);
 
         if req.term < self.current_term {
             // This request is out of date.
+            debug!("Request has older term. Failing request.");
             return self.send_append_entries_response(&req.leader_id, false);
         }
 
         if let Candidate(_) = self.role {
             // Someone else in the same term became a leader before us.
+            debug!("Another node became leader. Converting to follower.");
             self.convert_to_follower();
         }
 
         let prev_log_entry = self.log.get(req.prev_log_index);
         if prev_log_entry.is_none() {
             // We don't have the previous log entry.
+            debug!("Previous log entry not found. Failing request.");
             return self.send_append_entries_response(&req.leader_id, false);
         }
 
         let prev_log_term = prev_log_entry.unwrap().term;
         if prev_log_term != req.prev_log_term {
             // The previous log term doesn't match.
+            debug!("Previous log term doesn't match. Failing request.");
             return self.send_append_entries_response(&req.leader_id, false);
         }
 
         // The previous log term matches. Append the new entries.
+        debug!("Accepting request.");
+        self.driver.reset_election_timer();
         self.log.append(req.entries, req.prev_log_index.next());
 
         if req.leader_commit > self.commit_index {
             self.commit_index = req.leader_commit.min(self.log.last_index());
         }
 
+        debug!("Sending successful response.");
         self.send_append_entries_response(&req.leader_id, true);
     }
 
-    fn send_append_entries_response(&self, leader_id: &NodeId, success: bool) {
+    pub fn send_append_entries_response(&self, leader_id: &NodeId, success: bool) {
         let res = AppendEntriesResponse {
             node_id: self.node_id.clone(),
             term: self.current_term,
@@ -187,21 +181,27 @@ impl<D: RaftDriver> RaftNode<D> {
         self.driver.send(leader_id, &Message::AppendEntriesResponse(res));
     }
 
+    pub fn handle_append_entries_response(&mut self, res: AppendEntriesResponse) {
+        debug!("Received AppendEntriesResponse: {:?}", res);
 
-    fn handle_append_entries_response(&mut self, res: AppendEntriesResponse) {
         self.check_incoming_term(res.term);
 
         // If we are not the leader, we don't care about these responses.
         if let Leader(_) = self.role {
             if res.success {
+                debug!("Request was successful. Updating peer state for {:?}.", res.node_id);
                 let peer_state = self.get_mut_peer_state(&res.node_id);
                 peer_state.match_index = res.last_log_index;
                 peer_state.next_index = res.last_log_index.next();
             } else {
                 // The AppendEntriesRequest failed. Decrement the next_index. We will retry later.
+                debug!("Request failed. Decrementing next_index.");
                 let peer_state = self.get_mut_peer_state(&res.node_id);
                 peer_state.next_index = peer_state.next_index.prev();
             }
+        } else {
+            // We are not the leader. Don't care.
+            debug!("Not the leader. Ignoring response.");
         }
     }
 
@@ -221,11 +221,14 @@ impl<D: RaftDriver> RaftNode<D> {
         }
     }
 
-    fn handle_request_vote_request(&mut self, req: RequestVoteRequest) {
+    pub fn handle_request_vote_request(&mut self, req: RequestVoteRequest) {
+        debug!("Received RequestVoteRequest: {:?}", req);
+
         self.check_incoming_term(req.term);
 
         if req.term < self.current_term {
             // This candidate is out of date.
+            debug!("Candidate has older term. Failing vote request.");
             return self.send_failed_vote_response(&req.candidate_id);
         }
 
@@ -235,6 +238,7 @@ impl<D: RaftDriver> RaftNode<D> {
         };
         if !can_vote {
             // We already voted for someone else.
+            debug!("Already voted for another candidate. Failing vote request.");
             return self.send_failed_vote_response(&req.candidate_id);
         }
 
@@ -243,6 +247,7 @@ impl<D: RaftDriver> RaftNode<D> {
         let candidate_last_log_term = req.last_log_term;
         if candidate_last_log_term > our_last_log_term {
             // The candidate has a higher term, so we approve!
+            debug!("Candidate has higher term. Voting for candidate {:?}.", req.candidate_id);
             return self.vote_for(&req.candidate_id);
         }
 
@@ -251,10 +256,12 @@ impl<D: RaftDriver> RaftNode<D> {
         let candidate_last_log_index = req.last_log_index;
         if candidate_last_log_index >= our_last_log_index {
             // The candidate has at least as much log as we do, so we approve!
+            debug!("Candidate has at least as much log as we do. Voting for candidate {:?}.", req.candidate_id);
             return self.vote_for(&req.candidate_id);
         }
 
         // If we get here, the candidate's log is shorter than ours.
+        debug!("Candidate has shorter log. Failing vote request.");
         self.send_failed_vote_response(&req.candidate_id);
     }
 
@@ -268,6 +275,9 @@ impl<D: RaftDriver> RaftNode<D> {
     }
 
     fn vote_for(&mut self, candidate_id: &NodeId) {
+        // Since we are voting for this candidate, we can reset our election timer.
+        self.driver.reset_election_timer();
+
         self.voted_for = Some(candidate_id.clone());
         self.role = Follower;
         let res = RequestVoteResponse {
@@ -278,33 +288,36 @@ impl<D: RaftDriver> RaftNode<D> {
         self.driver.send(candidate_id, &Message::RequestVoteResponse(res));
     }
 
-    fn handle_request_vote_response(&mut self, res: RequestVoteResponse) {
+    pub fn handle_request_vote_response(&mut self, res: RequestVoteResponse) {
+        debug!("Received RequestVoteResponse: {:?}", res);
+
         self.check_incoming_term(res.term);
 
         match self.role {
             Candidate(ref mut state) => {
-                if res.term > self.current_term {
-                    // We are out of date. Become a follower.
-                    self.current_term = res.term;
-                    self.role = Follower;
-                    self.voted_for = None;
-                } else if res.vote_granted {
+                if res.vote_granted {
+                    debug!("Vote granted by {:?}.", res.node_id);
                     state.votes_received += 1;
 
                     if state.votes_received > self.driver.majority() as u64 {
                         // Great success!
                         self.become_leader();
                     }
+                } else {
+                    // The vote was not granted, just log it.
+                    debug!("Vote not granted by {:?}.", res.node_id);
                 }
             }
 
             _ => {
                 // We are not currently a candidate. Don't care.
+                debug!("Not a candidate. Ignoring response.");
             },
         }
     }
 
     fn become_leader(&mut self) {
+        info!("Becoming leader!");
         let mut peer_states = HashMap::new();
 
         for node_id in self.driver.nodes() {
@@ -321,12 +334,9 @@ impl<D: RaftDriver> RaftNode<D> {
 
     fn broadcast_heartbeat(&self) {
         for node_id in self.driver.nodes() {
-            self.heartbeat_node(&node_id);
+            self.send_append_entries(&node_id);
         }
-    }
-
-    fn heartbeat_node(&self, node_id: &NodeId) {
-        self.send_append_entries(node_id);
+        self.driver.reset_heartbeat_timer();
     }
 
     fn send_append_entries(&self, node_id: &NodeId) {
@@ -364,6 +374,7 @@ impl<D: RaftDriver> RaftNode<D> {
     // Convert to follower if the term is higher than the current term.
     fn check_incoming_term(&mut self, term: Term) {
         if self.current_term < term {
+            debug!("Received message with higher term. Converting to follower.");
             self.current_term = term;
             self.convert_to_follower();
         }
@@ -374,7 +385,8 @@ impl<D: RaftDriver> RaftNode<D> {
         self.role = Follower;
     }
 
-    fn handle_election_timeout(&mut self) {
+    pub fn handle_election_timeout(&mut self) {
+        info!("Hit election timeout! Starting election.");
         // Enter the next term.
         self.current_term = self.current_term.next();
 
@@ -397,9 +409,10 @@ impl<D: RaftDriver> RaftNode<D> {
         }
     }
 
-    fn handle_heartbeat_timeout(&mut self) {
+    pub fn handle_heartbeat_timeout(&mut self) {
         // We only do anything if we are the leader.
         if let Leader(_) = self.role {
+            debug!("Sending heartbeat on timeout.");
             self.broadcast_heartbeat();
         }
     }

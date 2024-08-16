@@ -1,6 +1,3 @@
-use std::time::Duration;
-
-use crate::raft::events::Timer;
 use crate::raft::messages::Message;
 use crate::raft::types::NodeId;
 
@@ -15,9 +12,9 @@ pub trait RaftDriver {
     /// Send a message to the given node.
     fn send(&self, to: &NodeId, message: &Message);
 
-    /// Emit a timer event after the given duration.
-    fn set_timer(&self, timer: Timer, duration: Duration);
+    /// Mark that we have received a message from a leader or candidate.
+    fn reset_election_timer(&self);
 
-    /// Clear a timer event.
-    fn clear_timer(&self, timer: Timer);
+    /// Mark that we are sending heartbeats.
+    fn reset_heartbeat_timer(&self);
 }
