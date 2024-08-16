@@ -5,8 +5,12 @@ use crate::raft::messages::Message;
 use crate::raft::types::NodeId;
 
 pub trait RaftDriver {
+    fn majority(&self) -> usize {
+        self.nodes().len() / 2 + 1
+    }
+
     /// The nodes of this raft group.
-    fn nodes() -> Vec<NodeId>;
+    fn nodes(&self) -> Vec<NodeId>;
 
     /// Send a message to the given node.
     fn send(&self, to: &NodeId, message: &Message);

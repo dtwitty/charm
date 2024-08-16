@@ -192,7 +192,7 @@ impl<D: RaftDriver> RaftNode<D> {
         self.check_incoming_term(res.term);
 
         // If we are not the leader, we don't care about these responses.
-        if let Leader(ref mut leader_state) = self.role {
+        if let Leader(_) = self.role {
             if res.success {
                 let peer_state = self.get_mut_peer_state(&res.node_id);
                 peer_state.match_index = res.last_log_index;
@@ -231,7 +231,7 @@ impl<D: RaftDriver> RaftNode<D> {
 
         let can_vote = match self.voted_for {
             None => true,  // We haven't voted yet.
-            Some(ref voted_for) => voted_for == *req.candidate_id,  // We already voted for this candidate.
+            Some(ref voted_for) => voted_for == &req.candidate_id,  // We already voted for this candidate.
         };
         if !can_vote {
             // We already voted for someone else.
@@ -291,8 +291,7 @@ impl<D: RaftDriver> RaftNode<D> {
                 } else if res.vote_granted {
                     state.votes_received += 1;
 
-                    let majority_votes = (self.driver.num_nodes() / 2) as u64 + 1;
-                    if state.votes_received > majority_votes {
+                    if state.votes_received > self.driver.majority() as u64 {
                         // Great success!
                         self.become_leader();
                     }
@@ -322,23 +321,16 @@ impl<D: RaftDriver> RaftNode<D> {
 
     fn broadcast_heartbeat(&self) {
         for node_id in self.driver.nodes() {
-            self.heartbeat_node(node_id);
+            self.heartbeat_node(&node_id);
         }
     }
 
     fn heartbeat_node(&self, node_id: &NodeId) {
-        self.send_append_entries(node_id, vec![]);
+        self.send_append_entries(node_id);
     }
 
-    fn append_outstanding_entries(&self, node_id: &NodeId) {
-        for node_id in self.driver.nodes() {
-            let entries = self.get_outstanding_entries(node_id);
-            self.send_append_entries(node_id, entries);
-        }
-    }
-
-    fn send_append_entries(&self, node_id: &NodeId, entries: Vec<LogEntry>) {
-        if let Leader(ref leader_state) = self.role {
+    fn send_append_entries(&self, node_id: &NodeId) {
+        if let Leader(_) = self.role {
             let peer_state = self.get_peer_state(node_id);
             let next_index = peer_state.next_index;
             let prev_log_index = next_index.prev();
@@ -360,7 +352,7 @@ impl<D: RaftDriver> RaftNode<D> {
     }
 
     fn get_outstanding_entries(&self, node_id: &NodeId) -> Vec<LogEntry> {
-        if let Leader(ref leader_state) = self.role {
+        if let Leader(_) = self.role {
             let peer_state = self.get_peer_state(node_id);
             let next_index = peer_state.next_index;
             self.log.entries[next_index.0 as usize..].to_vec()
@@ -406,9 +398,9 @@ impl<D: RaftDriver> RaftNode<D> {
     }
 
     fn handle_heartbeat_timeout(&mut self) {
-        /// We only do anything if we are the leader.
+        // We only do anything if we are the leader.
         if let Leader(_) = self.role {
-            self.append_outstanding_entries(&self.node_id);
+            self.broadcast_heartbeat();
         }
     }
 }
