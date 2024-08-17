@@ -2,12 +2,12 @@ use crate::raft::messages::Message;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Timer {
-    ElectionTimeout,
-    HeartbeatTimeout,
+    Election,
+    Heartbeat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    Message(Message),
-    Timeout(Timer),
+    MessageReceived(Message),
+    TimerTimedOut(Timer),
 }

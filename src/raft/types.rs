@@ -1,5 +1,3 @@
-use std::ops::Add;
-
 /// A term is a monotonically increasing number representing the number of elections that have
 /// occurred in the system. Used as a logical clock to order events in the system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash, Ord)]
@@ -8,14 +6,6 @@ pub struct Term(pub u64);
 impl Term {
     pub fn next(self) -> Term {
         Term(self.0 + 1)
-    }
-}
-
-impl Add for Term {
-    type Output = Term;
-
-    fn add(self, other: Term) -> Term {
-        Term(self.0 + other.0)
     }
 }
 
@@ -30,14 +20,6 @@ impl Index {
 
     pub fn prev(self) -> Index {
         Index(self.0 - 1)
-    }
-}
-
-impl Add for Index {
-    type Output = Index;
-
-    fn add(self, other: Index) -> Index {
-        Index(self.0 + other.0)
     }
 }
 

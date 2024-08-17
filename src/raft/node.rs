@@ -84,7 +84,7 @@ enum Role {
     Leader(LeaderState),
 }
 
-struct RaftNode<D> {
+pub struct RaftNode<D> {
     /// The unique identifier of this node.
     node_id: NodeId,
 
@@ -320,7 +320,7 @@ impl<D: RaftDriver> RaftNode<D> {
         info!("Becoming leader!");
         let mut peer_states = HashMap::new();
 
-        for node_id in self.driver.nodes() {
+        for node_id in self.driver.other_nodes() {
             let next_index = self.log.last_index().next();
             let match_index = Index(0);
             peer_states.insert(node_id.clone(), PeerState { next_index, match_index });
@@ -332,8 +332,8 @@ impl<D: RaftDriver> RaftNode<D> {
         self.broadcast_heartbeat();
     }
 
-    fn broadcast_heartbeat(&self) {
-        for node_id in self.driver.nodes() {
+    fn broadcast_heartbeat(&mut self) {
+        for node_id in self.driver.other_nodes() {
             self.send_append_entries(&node_id);
         }
         self.driver.reset_heartbeat_timer();
@@ -404,9 +404,12 @@ impl<D: RaftDriver> RaftNode<D> {
             last_log_term: self.log.last_log_term(),
         };
 
-        for node_id in self.driver.nodes() {
+        for node_id in self.driver.other_nodes() {
             self.driver.send(&node_id, &Message::RequestVoteRequest(req.clone()));
         }
+
+        // Reset the election timer.
+        self.driver.reset_election_timer();
     }
 
     pub fn handle_heartbeat_timeout(&mut self) {
