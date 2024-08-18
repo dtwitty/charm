@@ -19,7 +19,11 @@ impl Index {
     }
 
     pub fn prev(self) -> Index {
-        Index(self.0 - 1)
+        if self.0 == 0 {
+            Index(0)
+        } else {
+            Index(self.0 - 1)
+        }
     }
 }
 

@@ -56,7 +56,7 @@ impl Log {
     }
 
     pub fn entries_from(&self, index: Index) -> Vec<LogEntry> {
-        let idx = index.0 as usize - 1;
+        let idx = index.prev().0 as usize;
         self.entries[idx..].to_vec()
     }
 }

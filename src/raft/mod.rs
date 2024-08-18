@@ -3,5 +3,5 @@ pub mod types;
 pub mod node;
 pub mod network;
 pub mod events;
-mod config;
+pub mod config;
 mod log;

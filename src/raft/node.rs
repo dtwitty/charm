@@ -7,7 +7,7 @@ use rand::Rng;
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{sleep, Sleep};
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 use crate::raft::config::RaftConfig;
 use crate::raft::log::Log;
@@ -101,6 +101,14 @@ pub struct RaftNode<N> {
 }
 
 impl<N: Network> RaftNode<N> {
+    #[tracing::instrument(fields(node_id = config.node_id.0.clone()), skip_all)]
+    pub async fn run(config: RaftConfig, network: N, message_receiver: UnboundedReceiver<Message>) {
+        let mut node = RaftNode::new(config, network, message_receiver);
+        loop {
+            node.tick().await;
+        }
+    }
+
     pub fn new(config: RaftConfig, network: N, message_receiver: UnboundedReceiver<Message>) -> RaftNode<N> {
         let mut node = RaftNode {
             config,
@@ -343,7 +351,7 @@ impl<N: Network> RaftNode<N> {
             let peer_state = self.get_peer_state(node_id);
             let next_index = peer_state.next_index;
             let prev_log_index = next_index.prev();
-            let prev_log_term = self.log.get(prev_log_index).map(|entry| entry.term).expect("prev_log_index should exist");
+            let prev_log_term = self.log.get(prev_log_index).map(|entry| entry.term).unwrap_or(Term(0));
 
             let entries = self.log.entries_from(next_index);
 
@@ -436,6 +444,7 @@ impl<N: Network> RaftNode<N> {
     }
 
     fn handle_message(&mut self, message: Message) {
+        debug!("Received message: {:?}", message);
         match message {
             Message::AppendEntriesRequest(req) => {
                 self.handle_append_entries_request(req);
@@ -456,8 +465,10 @@ impl<N: Network> RaftNode<N> {
     }
 
     async fn tick(&mut self) {
+        trace!("Entering tick.");
         match self.role {
             Follower(ref follower_state) => {
+                trace!("Running follower tick.");
                 select! {
                      message = self.message_receiver.recv() => {
                           if let Some(message) = message {
@@ -472,6 +483,7 @@ impl<N: Network> RaftNode<N> {
             }
 
             Candidate(ref mut candidate_state) => {
+                trace!("Running candidate tick.");
                 select! {
                      message = self.message_receiver.recv() => {
                           if let Some(message) = message {
@@ -486,6 +498,7 @@ impl<N: Network> RaftNode<N> {
             }
 
             Leader(ref mut leader_state) => {
+                trace!("Running leader tick.");
                 select! {
                      message = self.message_receiver.recv() => {
                           if let Some(message) = message {
