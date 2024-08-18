@@ -1,69 +1,34 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
-use tracing::{debug, info, warn};
+use futures::future::Shared;
+use futures::FutureExt;
+use rand::Rng;
+use tokio::select;
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::time::{sleep, Sleep};
+use tracing::{debug, info};
 
+use crate::raft::config::RaftConfig;
+use crate::raft::log::Log;
 use crate::raft::messages::*;
+use crate::raft::network::Network;
 use crate::raft::node::Role::*;
-use crate::raft::raft_driver::RaftDriver;
 use crate::raft::types::*;
 
-struct Log {
-    entries: Vec<LogEntry>,
-}
-
-impl Log {
-    fn new() -> Log {
-        Log {
-            entries: vec![],
-        }
-    }
-
-    fn append<I: IntoIterator<Item=LogEntry>>(&mut self, entries: I, mut index: Index) {
-        for entry in entries {
-            let existing_entry = self.get(index);
-            match existing_entry {
-                Some(existing_entry) => {
-                    if existing_entry.term != entry.term {
-                        // Remove all entries from here on.
-                        warn!("Removing conflicting entries from index {:?}.", index);
-                        self.entries.truncate(index.0 as usize - 1);
-
-                        self.entries.push(entry);
-                    }
-
-                    // The entry already exists, so we don't need to do anything.
-                }
-
-                _ => {
-                    // We are at the end of the log. Go ahead and append the entry.
-                    self.entries.push(entry);
-                }
-            }
-            index = index.next();
-        }
-    }
-
-    fn get(&self, index: Index) -> Option<&LogEntry> {
-        if index.0 == 0 {
-            return None;
-        }
-
-        let idx = index.0 as usize - 1;
-        self.entries.get(idx)
-    }
-
-    fn last_index(&self) -> Index {
-        Index(self.entries.len() as u64)
-    }
-
-    fn last_log_term(&self) -> Term {
-        self.entries.last().map(|entry| entry.term).unwrap_or(Term(0))
-    }
+struct FollowerState {
+    /// The timer that will fire when the election timeout is reached.
+    /// This is used to start a new election.
+    election_timer: Shared<Sleep>
 }
 
 struct CandidateState {
     /// The number of votes that the candidate has received in the current term.
     votes_received: u64,
+
+    /// The timer that will fire when the election timeout is reached.
+    /// This is used to start a new election.
+    election_timer: Shared<Sleep>,
 }
 
 struct PeerState {
@@ -76,17 +41,36 @@ struct PeerState {
 
 struct LeaderState {
     peer_states: HashMap<NodeId, PeerState>,
+    heartbeat_timer: Shared<Sleep>,
 }
 
 enum Role {
-    Follower,
+    Follower(FollowerState),
     Candidate(CandidateState),
     Leader(LeaderState),
 }
 
-pub struct RaftNode<D> {
-    /// The unique identifier of this node.
-    node_id: NodeId,
+/*
+PLAN:
+Implement the `RaftNode` struct. It will interact directly with the sleeping system and use a
+passed-in Network to send messages to other nodes. It will also have a `handle_message` method
+that will be called when a message is received. There will finally be a `tick` method that waits for
+either a timeout or a message, and then calls `handle_message` or `handle_timeout` as appropriate.
+
+The driver method is simply a loop that calls `tick` and provides a Network object. Later it will provide
+a handle to the state machine.
+
+Next, implement a method to tell leaders to append logs.
+
+This will be a good time to start testing. Exhaustively test any safety properties you find in the paper.
+
+Implement applying logs to a state machine.
+
+
+ */
+
+pub struct RaftNode<N> {
+    config: RaftConfig,
 
     /// The current term of the node.
     current_term: Term,
@@ -109,26 +93,36 @@ pub struct RaftNode<D> {
     /// If this node is not a leader, this field is `None`.
     role: Role,
 
-    /// The interface to the outside world.
-    /// This is used to send messages and set timers.
-    driver: D,
+    /// An interface for sending messages to other nodes.
+    network: N,
+
+    /// For receiving messages from other nodes.
+    message_receiver: UnboundedReceiver<Message>,
 }
 
-impl<D: RaftDriver> RaftNode<D> {
-    pub fn new(node_id: NodeId, driver: D) -> RaftNode<D> {
-        RaftNode {
-            node_id,
+impl<N: Network> RaftNode<N> {
+    pub fn new(config: RaftConfig, network: N, message_receiver: UnboundedReceiver<Message>) -> RaftNode<N> {
+        let mut node = RaftNode {
+            config,
             current_term: Term(0),
             voted_for: None,
             log: Log::new(),
             commit_index: Index(0),
             last_applied: Index(0),
-            role: Follower,
-            driver,
-        }
+            role: Follower(FollowerState { election_timer: sleep(Duration::from_millis(0)).shared() }),
+            network,
+            message_receiver,
+        };
+
+        node.reset_election_timer();
+        node
     }
 
-    pub fn handle_append_entries_request(&mut self, req: AppendEntriesRequest) {
+    fn node_id(&self) -> &NodeId {
+        &self.config.node_id
+    }
+
+    fn handle_append_entries_request(&mut self, req: AppendEntriesRequest) {
         debug!("Received AppendEntriesRequest: {:?}", req);
         self.check_incoming_term(req.term);
 
@@ -160,7 +154,7 @@ impl<D: RaftDriver> RaftNode<D> {
 
         // The previous log term matches. Append the new entries.
         debug!("Accepting request.");
-        self.driver.reset_election_timer();
+        self.reset_election_timer();
         self.log.append(req.entries, req.prev_log_index.next());
 
         if req.leader_commit > self.commit_index {
@@ -171,17 +165,17 @@ impl<D: RaftDriver> RaftNode<D> {
         self.send_append_entries_response(&req.leader_id, true);
     }
 
-    pub fn send_append_entries_response(&self, leader_id: &NodeId, success: bool) {
+    fn send_append_entries_response(&self, leader_id: &NodeId, success: bool) {
         let res = AppendEntriesResponse {
-            node_id: self.node_id.clone(),
+            node_id: self.node_id().clone(),
             term: self.current_term,
             success,
             last_log_index: self.log.last_index(),
         };
-        self.driver.send(leader_id, &Message::AppendEntriesResponse(res));
+        self.network.send(leader_id, &Message::AppendEntriesResponse(res));
     }
 
-    pub fn handle_append_entries_response(&mut self, res: AppendEntriesResponse) {
+    fn handle_append_entries_response(&mut self, res: AppendEntriesResponse) {
         debug!("Received AppendEntriesResponse: {:?}", res);
 
         self.check_incoming_term(res.term);
@@ -221,7 +215,7 @@ impl<D: RaftDriver> RaftNode<D> {
         }
     }
 
-    pub fn handle_request_vote_request(&mut self, req: RequestVoteRequest) {
+    fn handle_request_vote_request(&mut self, req: RequestVoteRequest) {
         debug!("Received RequestVoteRequest: {:?}", req);
 
         self.check_incoming_term(req.term);
@@ -267,28 +261,28 @@ impl<D: RaftDriver> RaftNode<D> {
 
     fn send_failed_vote_response(&self, candidate_id: &NodeId) {
         let res = RequestVoteResponse {
-            node_id: self.node_id.clone(),
+            node_id: self.node_id().clone(),
             term: self.current_term,
             vote_granted: false,
         };
-        self.driver.send(candidate_id, &Message::RequestVoteResponse(res));
+        self.network.send(candidate_id, &Message::RequestVoteResponse(res));
     }
 
     fn vote_for(&mut self, candidate_id: &NodeId) {
-        // Since we are voting for this candidate, we can reset our election timer.
-        self.driver.reset_election_timer();
-
         self.voted_for = Some(candidate_id.clone());
-        self.role = Follower;
+
+        let election_timeout = self.get_election_timeout();
+        self.role = Follower(FollowerState { election_timer: sleep(election_timeout).shared() });
+
         let res = RequestVoteResponse {
-            node_id: self.node_id.clone(),
+            node_id: self.node_id().clone(),
             term: self.current_term,
             vote_granted: true,
         };
-        self.driver.send(candidate_id, &Message::RequestVoteResponse(res));
+        self.network.send(candidate_id, &Message::RequestVoteResponse(res));
     }
 
-    pub fn handle_request_vote_response(&mut self, res: RequestVoteResponse) {
+    fn handle_request_vote_response(&mut self, res: RequestVoteResponse) {
         debug!("Received RequestVoteResponse: {:?}", res);
 
         self.check_incoming_term(res.term);
@@ -299,7 +293,9 @@ impl<D: RaftDriver> RaftNode<D> {
                     debug!("Vote granted by {:?}.", res.node_id);
                     state.votes_received += 1;
 
-                    if state.votes_received > self.driver.majority() as u64 {
+
+                    let majority = self.config.other_nodes.len() / 2 + 1;
+                    if state.votes_received > majority as u64 {
                         // Great success!
                         self.become_leader();
                     }
@@ -320,23 +316,26 @@ impl<D: RaftDriver> RaftNode<D> {
         info!("Becoming leader!");
         let mut peer_states = HashMap::new();
 
-        for node_id in self.driver.other_nodes() {
+        for node_id in &self.config.other_nodes {
             let next_index = self.log.last_index().next();
             let match_index = Index(0);
             peer_states.insert(node_id.clone(), PeerState { next_index, match_index });
         }
 
-        self.role = Leader(LeaderState { peer_states });
+        let leader_state = LeaderState {
+            peer_states,
+            heartbeat_timer: sleep(self.config.heartbeat_interval).shared(),
+        };
+        self.role = Leader(leader_state);
 
         // Send initial empty AppendEntriesRequests to all nodes.
         self.broadcast_heartbeat();
     }
 
     fn broadcast_heartbeat(&mut self) {
-        for node_id in self.driver.other_nodes() {
+        for node_id in &self.config.other_nodes {
             self.send_append_entries(&node_id);
         }
-        self.driver.reset_heartbeat_timer();
     }
 
     fn send_append_entries(&self, node_id: &NodeId) {
@@ -346,28 +345,18 @@ impl<D: RaftDriver> RaftNode<D> {
             let prev_log_index = next_index.prev();
             let prev_log_term = self.log.get(prev_log_index).map(|entry| entry.term).expect("prev_log_index should exist");
 
-            let entries = self.log.entries[next_index.0 as usize..].to_vec();
+            let entries = self.log.entries_from(next_index);
 
             let req = AppendEntriesRequest {
                 term: self.current_term,
-                leader_id: self.node_id.clone(),
+                leader_id: self.node_id().clone(),
                 prev_log_index,
                 prev_log_term,
                 entries,
                 leader_commit: self.commit_index,
             };
 
-            self.driver.send(node_id, &Message::AppendEntriesRequest(req));
-        }
-    }
-
-    fn get_outstanding_entries(&self, node_id: &NodeId) -> Vec<LogEntry> {
-        if let Leader(_) = self.role {
-            let peer_state = self.get_peer_state(node_id);
-            let next_index = peer_state.next_index;
-            self.log.entries[next_index.0 as usize..].to_vec()
-        } else {
-            panic!("not a leader");
+            self.network.send(node_id, &Message::AppendEntriesRequest(req));
         }
     }
 
@@ -382,41 +371,134 @@ impl<D: RaftDriver> RaftNode<D> {
 
     fn convert_to_follower(&mut self) {
         self.voted_for = None;
-        self.role = Follower;
+        let follower_state = FollowerState { election_timer: sleep(self.get_election_timeout()).shared() };
+        self.role = Follower(follower_state);
     }
 
-    pub fn handle_election_timeout(&mut self) {
+    fn handle_election_timeout(&mut self) {
         info!("Hit election timeout! Starting election.");
         // Enter the next term.
         self.current_term = self.current_term.next();
 
         // Vote for ourselves.
-        self.voted_for = Some(self.node_id.clone());
+        self.voted_for = Some(self.node_id().clone());
 
-        // Become a candidate.
-        self.role = Candidate(CandidateState { votes_received: 1 });
+        // Become a candidate, and reset the election timer.
+        let mut rng = rand::thread_rng();
+        let election_timeout = rng.gen_range(self.config.election_timeout_min..self.config.election_timeout_max);
+        let candidate_state = CandidateState { votes_received: 1, election_timer: sleep(election_timeout).shared() };
+        self.role = Candidate(candidate_state);
 
         // Send RequestVoteRequests to all nodes.
         let req = RequestVoteRequest {
             term: self.current_term,
-            candidate_id: self.node_id.clone(),
+            candidate_id: self.node_id().clone(),
             last_log_index: self.log.last_index(),
             last_log_term: self.log.last_log_term(),
         };
 
-        for node_id in self.driver.other_nodes() {
-            self.driver.send(&node_id, &Message::RequestVoteRequest(req.clone()));
+        for node_id in &self.config.other_nodes {
+            self.network.send(&node_id, &Message::RequestVoteRequest(req.clone()));
         }
-
-        // Reset the election timer.
-        self.driver.reset_election_timer();
     }
 
-    pub fn handle_heartbeat_timeout(&mut self) {
+    fn handle_heartbeat_timeout(&mut self) {
         // We only do anything if we are the leader.
-        if let Leader(_) = self.role {
+        if let Leader(ref mut leader_state) = self.role {
             debug!("Sending heartbeat on timeout.");
+            leader_state.heartbeat_timer = sleep(self.config.heartbeat_interval).shared();
             self.broadcast_heartbeat();
         }
     }
+
+    fn get_election_timeout(&self) -> Duration {
+        let mut rng = rand::thread_rng();
+        let election_timeout_min = self.config.election_timeout_min;
+        let election_timeout_max = self.config.election_timeout_max;
+        rng.gen_range(election_timeout_min..election_timeout_max)
+    }
+
+    fn reset_election_timer(&mut self) {
+        let election_timeout = self.get_election_timeout();
+        match self.role {
+            Follower(ref mut follower_state) => {
+                follower_state.election_timer = sleep(election_timeout).shared();
+            }
+
+            Candidate(ref mut candidate_state) => {
+                candidate_state.election_timer = sleep(election_timeout).shared();
+            }
+
+            Leader(_) => {
+                // Leaders don't have election timers.
+            }
+        }
+    }
+
+    fn handle_message(&mut self, message: Message) {
+        match message {
+            Message::AppendEntriesRequest(req) => {
+                self.handle_append_entries_request(req);
+            }
+
+            Message::AppendEntriesResponse(res) => {
+                self.handle_append_entries_response(res);
+            }
+
+            Message::RequestVoteRequest(req) => {
+                self.handle_request_vote_request(req);
+            }
+
+            Message::RequestVoteResponse(res) => {
+                self.handle_request_vote_response(res);
+            }
+        }
+    }
+
+    async fn tick(&mut self) {
+        match self.role {
+            Follower(ref follower_state) => {
+                select! {
+                     message = self.message_receiver.recv() => {
+                          if let Some(message) = message {
+                            self.handle_message(message);
+                          }
+                     }
+
+                     _ = follower_state.election_timer.clone() => {
+                          self.handle_election_timeout();
+                     }
+               }
+            }
+
+            Candidate(ref mut candidate_state) => {
+                select! {
+                     message = self.message_receiver.recv() => {
+                          if let Some(message) = message {
+                            self.handle_message(message);
+                          }
+                     }
+
+                     _ = candidate_state.election_timer.clone() => {
+                          self.handle_election_timeout();
+                     }
+               }
+            }
+
+            Leader(ref mut leader_state) => {
+                select! {
+                     message = self.message_receiver.recv() => {
+                          if let Some(message) = message {
+                            self.handle_message(message);
+                          }
+                     }
+
+                     _ = leader_state.heartbeat_timer.clone() => {
+                          self.handle_heartbeat_timeout();
+                     }
+               }
+            }
+        }
+    }
 }
+
