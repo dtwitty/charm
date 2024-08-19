@@ -126,8 +126,110 @@ impl<N: Network> RaftNode<N> {
         node
     }
 
-    fn node_id(&self) -> &NodeId {
-        &self.config.node_id
+    async fn tick(&mut self) {
+        trace!("Entering tick.");
+        match self.role {
+            Follower(ref follower_state) => {
+                trace!("Running follower tick.");
+                select! {
+                     message = self.message_receiver.recv() => {
+                          if let Some(message) = message {
+                            self.handle_message(message);
+                          }
+                     }
+
+                     _ = follower_state.election_timer.clone() => {
+                          self.handle_election_timeout();
+                     }
+               }
+            }
+
+            Candidate(ref mut candidate_state) => {
+                trace!("Running candidate tick.");
+                select! {
+                     message = self.message_receiver.recv() => {
+                          if let Some(message) = message {
+                            self.handle_message(message);
+                          }
+                     }
+
+                     _ = candidate_state.election_timer.clone() => {
+                          self.handle_election_timeout();
+                     }
+               }
+            }
+
+            Leader(ref mut leader_state) => {
+                trace!("Running leader tick.");
+                select! {
+                     message = self.message_receiver.recv() => {
+                          if let Some(message) = message {
+                            self.handle_message(message);
+                          }
+                     }
+
+                     _ = leader_state.heartbeat_timer.clone() => {
+                          self.handle_heartbeat_timeout();
+                     }
+               }
+            }
+        }
+    }
+
+    fn handle_message(&mut self, message: Message) {
+        match message {
+            Message::AppendEntriesRequest(req) => {
+                self.handle_append_entries_request(req);
+            }
+
+            Message::AppendEntriesResponse(res) => {
+                self.handle_append_entries_response(res);
+            }
+
+            Message::RequestVoteRequest(req) => {
+                self.handle_request_vote_request(req);
+            }
+
+            Message::RequestVoteResponse(res) => {
+                self.handle_request_vote_response(res);
+            }
+        }
+    }
+
+    fn handle_election_timeout(&mut self) {
+        info!("Hit election timeout! Starting election.");
+        // Enter the next term.
+        self.current_term = self.current_term.next();
+
+        // Vote for ourselves.
+        self.voted_for = Some(self.node_id().clone());
+
+        // Become a candidate, and reset the election timer.
+        let mut rng = rand::thread_rng();
+        let election_timeout = rng.gen_range(self.config.election_timeout_min..self.config.election_timeout_max);
+        let candidate_state = CandidateState { votes_received: 1, election_timer: sleep(election_timeout).shared() };
+        self.role = Candidate(candidate_state);
+
+        // Send RequestVoteRequests to all nodes.
+        let req = RequestVoteRequest {
+            term: self.current_term,
+            candidate_id: self.node_id().clone(),
+            last_log_index: self.log.last_index(),
+            last_log_term: self.log.last_log_term(),
+        };
+
+        for node_id in &self.config.other_nodes {
+            self.network.send(&node_id, &Message::RequestVoteRequest(req.clone()));
+        }
+    }
+
+    fn handle_heartbeat_timeout(&mut self) {
+        // We only do anything if we are the leader.
+        if let Leader(ref mut leader_state) = self.role {
+            debug!("Sending heartbeat on timeout.");
+            leader_state.heartbeat_timer = sleep(self.config.heartbeat_interval).shared();
+            self.broadcast_heartbeat();
+        }
     }
 
     fn handle_append_entries_request(&mut self, req: AppendEntriesRequest) {
@@ -393,42 +495,6 @@ impl<N: Network> RaftNode<N> {
         self.role = Follower(follower_state);
     }
 
-    fn handle_election_timeout(&mut self) {
-        info!("Hit election timeout! Starting election.");
-        // Enter the next term.
-        self.current_term = self.current_term.next();
-
-        // Vote for ourselves.
-        self.voted_for = Some(self.node_id().clone());
-
-        // Become a candidate, and reset the election timer.
-        let mut rng = rand::thread_rng();
-        let election_timeout = rng.gen_range(self.config.election_timeout_min..self.config.election_timeout_max);
-        let candidate_state = CandidateState { votes_received: 1, election_timer: sleep(election_timeout).shared() };
-        self.role = Candidate(candidate_state);
-
-        // Send RequestVoteRequests to all nodes.
-        let req = RequestVoteRequest {
-            term: self.current_term,
-            candidate_id: self.node_id().clone(),
-            last_log_index: self.log.last_index(),
-            last_log_term: self.log.last_log_term(),
-        };
-
-        for node_id in &self.config.other_nodes {
-            self.network.send(&node_id, &Message::RequestVoteRequest(req.clone()));
-        }
-    }
-
-    fn handle_heartbeat_timeout(&mut self) {
-        // We only do anything if we are the leader.
-        if let Leader(ref mut leader_state) = self.role {
-            debug!("Sending heartbeat on timeout.");
-            leader_state.heartbeat_timer = sleep(self.config.heartbeat_interval).shared();
-            self.broadcast_heartbeat();
-        }
-    }
-
     fn get_election_timeout(&self) -> Duration {
         let mut rng = rand::thread_rng();
         let election_timeout_min = self.config.election_timeout_min;
@@ -453,74 +519,9 @@ impl<N: Network> RaftNode<N> {
         }
     }
 
-    fn handle_message(&mut self, message: Message) {
-        match message {
-            Message::AppendEntriesRequest(req) => {
-                self.handle_append_entries_request(req);
-            }
 
-            Message::AppendEntriesResponse(res) => {
-                self.handle_append_entries_response(res);
-            }
-
-            Message::RequestVoteRequest(req) => {
-                self.handle_request_vote_request(req);
-            }
-
-            Message::RequestVoteResponse(res) => {
-                self.handle_request_vote_response(res);
-            }
-        }
-    }
-
-    async fn tick(&mut self) {
-        trace!("Entering tick.");
-        match self.role {
-            Follower(ref follower_state) => {
-                trace!("Running follower tick.");
-                select! {
-                     message = self.message_receiver.recv() => {
-                          if let Some(message) = message {
-                            self.handle_message(message);
-                          }
-                     }
-
-                     _ = follower_state.election_timer.clone() => {
-                          self.handle_election_timeout();
-                     }
-               }
-            }
-
-            Candidate(ref mut candidate_state) => {
-                trace!("Running candidate tick.");
-                select! {
-                     message = self.message_receiver.recv() => {
-                          if let Some(message) = message {
-                            self.handle_message(message);
-                          }
-                     }
-
-                     _ = candidate_state.election_timer.clone() => {
-                          self.handle_election_timeout();
-                     }
-               }
-            }
-
-            Leader(ref mut leader_state) => {
-                trace!("Running leader tick.");
-                select! {
-                     message = self.message_receiver.recv() => {
-                          if let Some(message) = message {
-                            self.handle_message(message);
-                          }
-                     }
-
-                     _ = leader_state.heartbeat_timer.clone() => {
-                          self.handle_heartbeat_timeout();
-                     }
-               }
-            }
-        }
+    fn node_id(&self) -> &NodeId {
+        &self.config.node_id
     }
 }
 
