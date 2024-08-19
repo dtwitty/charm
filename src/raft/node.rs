@@ -44,6 +44,16 @@ struct LeaderState {
     heartbeat_timer: Shared<Sleep>,
 }
 
+impl LeaderState {
+    fn get_mut_peer_state(&mut self, node_id: &NodeId) -> &mut PeerState {
+        self.peer_states.get_mut(node_id).expect("peer state not found")
+    }
+
+    fn get_peer_state(&self, node_id: &NodeId) -> &PeerState {
+        self.peer_states.get(node_id).expect("peer state not found")
+    }
+}
+
 enum Role {
     Follower(FollowerState),
     Candidate(CandidateState),
@@ -110,6 +120,7 @@ impl<N: Network> RaftNode<N> {
     }
 
     pub fn new(config: RaftConfig, network: N, message_receiver: UnboundedReceiver<Message>) -> RaftNode<N> {
+        let follower_state = FollowerState { election_timer: sleep(config.get_election_timeout()).shared() };
         let mut node = RaftNode {
             config,
             current_term: Term(0),
@@ -117,7 +128,7 @@ impl<N: Network> RaftNode<N> {
             log: Log::new(),
             commit_index: Index(0),
             last_applied: Index(0),
-            role: Follower(FollowerState { election_timer: sleep(Duration::from_millis(0)).shared() }),
+            role: Follower(follower_state),
             network,
             message_receiver,
         };
@@ -301,16 +312,16 @@ impl<N: Network> RaftNode<N> {
         self.check_incoming_term(res.term);
 
         // If we are not the leader, we don't care about these responses.
-        if let Leader(_) = self.role {
+        if let Leader(ref mut leader_state) = self.role {
             if res.success {
                 debug!("Request was successful. Updating peer state for {:?}.", res.node_id);
-                let peer_state = self.get_mut_peer_state(&res.node_id);
+                let peer_state = leader_state.get_mut_peer_state(&res.node_id);
                 peer_state.match_index = res.last_log_index;
                 peer_state.next_index = res.last_log_index.next();
             } else {
                 // The AppendEntriesRequest failed. Decrement the next_index. We will retry later.
                 debug!("Request failed. Decrementing next_index.");
-                let peer_state = self.get_mut_peer_state(&res.node_id);
+                let peer_state = leader_state.get_mut_peer_state(&res.node_id);
                 peer_state.next_index = peer_state.next_index.prev();
             }
         } else {
@@ -319,21 +330,7 @@ impl<N: Network> RaftNode<N> {
         }
     }
 
-    fn get_mut_peer_state(&mut self, node_id: &NodeId) -> &mut PeerState {
-        if let Leader(ref mut leader_state) = self.role {
-            leader_state.peer_states.get_mut(node_id).expect("peer state not found")
-        } else {
-            panic!("not a leader")
-        }
-    }
 
-    fn get_peer_state(&self, node_id: &NodeId) -> &PeerState {
-        if let Leader(ref leader_state) = self.role {
-            leader_state.peer_states.get(node_id).expect("peer state not found")
-        } else {
-            panic!("not a leader")
-        }
-    }
 
     fn handle_request_vote_request(&mut self, req: RequestVoteRequest) {
         debug!("Received RequestVoteRequest: {:?}", req);
@@ -459,8 +456,8 @@ impl<N: Network> RaftNode<N> {
     }
 
     fn send_append_entries(&self, node_id: &NodeId) {
-        if let Leader(_) = self.role {
-            let peer_state = self.get_peer_state(node_id);
+        if let Leader(ref leader_state) = self.role {
+            let peer_state = leader_state.get_peer_state(node_id);
             let next_index = peer_state.next_index;
             let prev_log_index = next_index.prev();
             let prev_log_term = self.log.get(prev_log_index).map(|entry| entry.term).unwrap_or(Term(0));
