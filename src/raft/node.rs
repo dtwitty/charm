@@ -146,6 +146,16 @@ impl<N: Network> RaftNode<N> {
             self.convert_to_follower();
         }
 
+        // Edge case: the log is empty.
+        if self.log.last_index() == Index(0) {
+            // The log is empty. We can accept any entries.
+            debug!("Log is empty. Accepting request.");
+            self.reset_election_timer();
+            self.log.append(req.entries, Index(0));
+            self.commit_index = req.leader_commit.min(self.log.last_index());
+            return self.send_append_entries_response(&req.leader_id, true);
+        }
+
         let prev_log_entry = self.log.get(req.prev_log_index);
         if prev_log_entry.is_none() {
             // We don't have the previous log entry.
@@ -444,7 +454,6 @@ impl<N: Network> RaftNode<N> {
     }
 
     fn handle_message(&mut self, message: Message) {
-        debug!("Received message: {:?}", message);
         match message {
             Message::AppendEntriesRequest(req) => {
                 self.handle_append_entries_request(req);
