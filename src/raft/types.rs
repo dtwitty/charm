@@ -33,11 +33,11 @@ pub struct NodeId(pub String);
 
 /// A command to be executed by the state machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Command(pub Vec<u8>);
+pub struct Data(pub Vec<u8>);
 
 /// A log entry, containing a command to be executed and the term in which it was received.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogEntry {
     pub term: Term,
-    pub command: Command,
+    pub data: Data,
 }

@@ -13,7 +13,12 @@ impl Log {
         }
     }
 
-    pub fn append<I: IntoIterator<Item=LogEntry>>(&mut self, entries: I, mut index: Index) {
+    pub fn append(&mut self, entry: LogEntry) -> Index {
+        self.entries.push(entry);
+        Index(self.entries.len() as u64)
+    }
+
+    pub fn append_all<I: IntoIterator<Item=LogEntry>>(&mut self, entries: I, mut index: Index) {
         for entry in entries {
             let existing_entry = self.get(index);
             match existing_entry {

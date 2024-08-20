@@ -4,3 +4,4 @@ pub mod node;
 pub mod network;
 pub mod config;
 mod log;
+pub mod commands;
