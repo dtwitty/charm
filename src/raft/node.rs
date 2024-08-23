@@ -108,10 +108,6 @@ pub struct RaftNode<N> {
     /// Initialized to 0, increases monotonically.
     commit_index: Index,
 
-    /// Used to watch for changes to the commit index, to complete requests.
-    commit_index_watch_tx: watch::Sender<()>,
-    commit_index_watch_rx: watch::Receiver<()>,
-
     /// The index of the highest log entry applied to the state machine.
     /// Initialized to 0, increases monotonically.
     last_applied: Index,
@@ -119,10 +115,6 @@ pub struct RaftNode<N> {
     /// State that only exists if this node is a leader.
     /// If this node is not a leader, this field is `None`.
     role: Role,
-
-    /// Used to watch for changes to our role.
-    role_watch_tx: watch::Sender<()>,
-    role_watch_rx: watch::Receiver<()>,
 
     /// An interface for sending messages to other nodes.
     network: N,
@@ -146,20 +138,15 @@ impl<N: Network> RaftNode<N> {
 
     pub fn new(config: RaftConfig, network: N, message_receiver: UnboundedReceiver<Message>, request_receiver: UnboundedReceiver<RaftRequest>) -> RaftNode<N> {
         let follower_state = FollowerState { election_timer: sleep(config.get_election_timeout()).shared() };
-        let commit_index_watch = watch::channel(());
-        let role_watch = watch::channel(());
+
         let mut node = RaftNode {
             config,
             current_term: Term(0),
             voted_for: None,
             log: Log::new(),
             commit_index: Index(0),
-            commit_index_watch_tx: commit_index_watch.0,
-            commit_index_watch_rx: commit_index_watch.1,
             last_applied: Index(0),
             role: Follower(follower_state),
-            role_watch_tx: role_watch.0,
-            role_watch_rx: role_watch.1,
             network,
             message_receiver,
             request_receiver,
@@ -251,7 +238,8 @@ impl<N: Network> RaftNode<N> {
         let mut rng = rand::thread_rng();
         let election_timeout = rng.gen_range(self.config.election_timeout_min..self.config.election_timeout_max);
         let candidate_state = CandidateState { votes_received: 1, election_timer: sleep(election_timeout).shared() };
-        self.update_role(Candidate(candidate_state));
+        let role = Candidate(candidate_state);
+        self.role = role;
 
         // Send RequestVoteRequests to all nodes.
         let req = RequestVoteRequest {
@@ -288,49 +276,6 @@ impl<N: Network> RaftNode<N> {
             RaftRequest::Campaign(campaign_request, reply_to) => {}
 
             RaftRequest::GetEntries(get_entries_request, reply_to) => {}
-        }
-    }
-
-    async fn handle_propose_request(&mut self, req: ProposeRequest) -> RaftResult<ProposeResponse> {
-        let mut idx = Index(0);
-        match self.role {
-            Leader(ref mut leader_state) => {
-                // We are the leader. Append the entry to the log.
-                let entry = LogEntry {
-                    term: self.current_term,
-                    data: req.data,
-                };
-
-                idx = self.log.append(entry);
-            }
-
-            _ => {
-                // We are not the leader. Respond with an error.
-                return Err(RaftError::NotLeader(NotLeaderError { leader_id: None }));
-            }
-        }
-
-
-        // If we got here, we were the leader, and we appended the entry.
-        // Wait until either the commit index goes up to include `idx` or we lose leadership.
-        loop {
-            select! {
-                _ = self.commit_index_watch_rx.changed() => {
-                    if self.commit_index >= idx {
-                        // The entry was committed.
-                        return Ok(ProposeResponse { index: idx });
-                    }
-                }
-
-                _ = self.role_watch_rx.changed() => {
-                    if let Leader(_) = self.role {
-                        // We are still the leader. Continue waiting.
-                    } else {
-                        // We are no longer the leader.
-                        return Err(RaftError::NotLeader(NotLeaderError { leader_id: None }));
-                    }
-                }
-            }
         }
     }
 
@@ -415,7 +360,6 @@ impl<N: Network> RaftNode<N> {
                 if majority_match > self.commit_index {
                     debug!("Cluster majority advanced to index {:?}. Updating commit index.", majority_match);
                     self.commit_index = majority_match;
-                    self.commit_index_watch_tx.send(()).unwrap();
                 }
             } else {
                 // The AppendEntriesRequest failed. Decrement the next_index. We will retry later.
@@ -488,7 +432,8 @@ impl<N: Network> RaftNode<N> {
         self.voted_for = Some(candidate_id.clone());
 
         let election_timeout = self.get_election_timeout();
-        self.update_role(Follower(FollowerState { election_timer: sleep(election_timeout).shared() }));
+        let role = Follower(FollowerState { election_timer: sleep(election_timeout).shared() });
+        self.role = role;
 
         let res = RequestVoteResponse {
             node_id: self.node_id().clone(),
@@ -542,7 +487,8 @@ impl<N: Network> RaftNode<N> {
             peer_states,
             heartbeat_timer: sleep(self.config.heartbeat_interval).shared(),
         };
-        self.update_role(Leader(leader_state));
+        let role = Leader(leader_state);
+        self.role = role;
 
         // Send initial empty AppendEntriesRequests to all nodes.
         self.broadcast_heartbeat();
@@ -588,7 +534,8 @@ impl<N: Network> RaftNode<N> {
     fn convert_to_follower(&mut self) {
         self.voted_for = None;
         let follower_state = FollowerState { election_timer: sleep(self.get_election_timeout()).shared() };
-        self.update_role(Follower(follower_state));
+        let role = Follower(follower_state);
+        self.role = role;
     }
 
     fn get_election_timeout(&self) -> Duration {
@@ -617,11 +564,6 @@ impl<N: Network> RaftNode<N> {
 
     fn node_id(&self) -> &NodeId {
         &self.config.node_id
-    }
-
-    fn update_role(&mut self, role: Role) {
-        self.role = role;
-        self.role_watch_tx.send(()).unwrap();
     }
 }
 
