@@ -1,3 +1,5 @@
+mod raft;
+
 use std::time::Duration;
 
 use clap::Parser;
@@ -33,4 +35,5 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+
 }

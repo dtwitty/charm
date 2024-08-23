@@ -1,0 +1,48 @@
+syntax = "proto3";
+package charm;
+
+message RaftMessage {
+  oneof message {
+    AppendEntriesRequest append_entries_request = 2;
+    AppendEntriesResponse append_entries_response = 3;
+    RequestVoteRequest request_vote_request = 4;
+    RequestVoteResponse request_vote_response = 5;
+  }
+}
+
+message LogEntry {
+  uint64 term = 2;
+  bytes data = 3;
+}
+
+message AppendEntriesRequest {
+  uint64 term = 1;
+  string node_id = 2;
+  uint64 prev_log_index = 3;
+  uint64 prev_log_term = 4;
+  repeated LogEntry entries = 5;
+  uint64 leader_commit = 6;
+}
+
+message AppendEntriesResponse {
+  string node_id = 1 ;
+  uint64 term = 2;
+  bool success = 3;
+}
+
+message RequestVoteRequest {
+  int32 term = 1;
+  string node_id = 2;
+  uint64 last_log_index = 3;
+  uint64 last_log_term = 4;
+}
+
+message RequestVoteResponse {
+  string node_id = 1 ;
+  uint64 term = 2;
+  bool vote_granted = 3;
+}
+
+service RaftService {
+  rpc TalkTo(stream RaftMessage) returns (stream RaftMessage);
+}

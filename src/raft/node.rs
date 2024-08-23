@@ -263,22 +263,6 @@ impl<N: Network> RaftNode<N> {
         }
     }
 
-    async fn handle_request(&mut self, req: RaftRequest) {
-        debug!("Received RaftRequest: {:?}", req);
-        match req {
-            RaftRequest::Propose(propose_request, reply_to) => {
-                tokio::spawn(async move {
-                    let response = self.handle_propose_request(propose_request).await;
-                    reply_to.send(response).unwrap();
-                });
-            }
-
-            RaftRequest::Campaign(campaign_request, reply_to) => {}
-
-            RaftRequest::GetEntries(get_entries_request, reply_to) => {}
-        }
-    }
-
     fn handle_append_entries_request(&mut self, req: AppendEntriesRequest) {
         debug!("Received AppendEntriesRequest: {:?}", req);
         self.check_incoming_term(req.term);
