@@ -1,74 +1,102 @@
 use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, Message, RequestVoteRequest, RequestVoteResponse};
-use crate::raft::network::charm::raft_server::{Raft, RaftServer};
-use crate::raft::network::charm::{AppendEntriesRequestPb, AppendEntriesResponsePb, RequestVoteRequestPb, RequestVoteResponsePb};
-use crate::raft::types::NodeId;
-use futures::Stream;
-use tokio::net::ToSocketAddrs;
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::oneshot;
-use tokio::sync::oneshot::Sender;
-use tonic::{Request, Response, Status};
+use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
 
 pub mod charm {
     tonic::include_proto!("raftpb");
 }
 
 pub struct Network {
-    /// For sending messages to other nodes.
-    send_tx: UnboundedSender<(NodeId, Message)>,
-
-    /// For sending messages to the raft core.
-    core_tx: UnboundedSender<(Message, Sender<Message>)>,
-
-    server: RaftServer<Network>,
 }
 
-impl Network {}
 
-impl Raft for Network {
-    async fn append_entries(&self, request: Request<AppendEntriesRequestPb>) -> Result<Response<AppendEntriesResponsePb>, Status> {
-        let request = request.into_inner();
-        let request = append_entries_request_pb_to_message(request);
-        let (tx, rx) = oneshot::channel();
-        self.core_tx.send((Message::AppendEntriesRequest(request), tx)).expect("Core is down!");
-        let response = rx.await.expect("Core is down!");
-
-        Ok(Response::new(response))
+impl Network {
+    pub fn send(&self, node_id: NodeId, message: Message) {
     }
 
-    async fn request_vote(&self, request: Request<RequestVoteRequestPb>) -> Result<Response<RequestVoteResponsePb>, Status> {
-        todo!()
+    // Send data over UDP to the address in the node id.
+    fn send_raw(node_id: &NodeId, bytes: Vec<u8>) {
+        let remote_addr = node_id.0.parse().unwrap();
     }
+
+
 }
 
 fn append_entries_request_pb_to_message(request: AppendEntriesRequestPb) -> AppendEntriesRequest {
-    todo!()
+    AppendEntriesRequest {
+        term: Term(request.term),
+        leader_id: NodeId(request.leader_id),
+        prev_log_index: Index(request.prev_log_index),
+        prev_log_term: Term(request.prev_log_term),
+        entries: request.entries.into_iter().map(|entry| LogEntry {
+            term: Term(entry.term),
+            data: Data(entry.data),
+        }).collect(),
+        leader_commit: Index(request.leader_commit),
+    }
 }
 
 fn append_entries_request_message_to_pb(request: AppendEntriesRequest) -> AppendEntriesRequestPb {
-    todo!()
+    AppendEntriesRequestPb {
+        term: request.term.0,
+        leader_id: request.leader_id.0,
+        prev_log_index: request.prev_log_index.0,
+        prev_log_term: request.prev_log_term.0,
+        entries: request.entries.into_iter().map(|entry| LogEntryPb {
+            term: entry.term.0,
+            data: entry.data.0,
+        }).collect(),
+        leader_commit: request.leader_commit.0,
+    }
 }
 
 fn append_entries_response_pb_to_message(response: AppendEntriesResponsePb) -> AppendEntriesResponse {
-    todo!()
+    AppendEntriesResponse {
+        node_id: NodeId(response.node_id),
+        term: Term(response.term),
+        success: response.success,
+        last_log_index: Index(response.last_log_index),
+    }
 }
 
 fn append_entries_response_message_to_pb(response: AppendEntriesResponse) -> AppendEntriesResponsePb {
-    todo!()
+    AppendEntriesResponsePb {
+        node_id: response.node_id.0,
+        term: response.term.0,
+        success: response.success,
+        last_log_index: response.last_log_index.0,
+    }
 }
 
 fn request_vote_request_pb_to_message(request: RequestVoteRequestPb) -> RequestVoteRequest {
-    todo!()
+    RequestVoteRequest {
+        term: Term(request.term),
+        candidate_id: NodeId(request.candidate_id),
+        last_log_index: Index(request.last_log_index),
+        last_log_term: Term(request.last_log_term),
+    }
 }
 
 fn request_vote_request_message_to_pb(request: RequestVoteRequest) -> RequestVoteRequestPb {
-    todo!()
+    RequestVoteRequestPb {
+        term: request.term.0,
+        candidate_id: request.candidate_id.0,
+        last_log_index: request.last_log_index.0,
+        last_log_term: request.last_log_term.0,
+    }
 }
 
 fn request_vote_response_pb_to_message(response: RequestVoteResponsePb) -> RequestVoteResponse {
-    todo!()
+    RequestVoteResponse {
+        node_id: NodeId(response.node_id),
+        term: Term(response.term),
+        vote_granted: response.vote_granted,
+    }
 }
 
 fn request_vote_response_message_to_pb(response: RequestVoteResponse) -> RequestVoteResponsePb {
-    todo!()
+    RequestVoteResponsePb {
+        node_id: response.node_id.0,
+        term: response.term.0,
+        vote_granted: response.vote_granted,
+    }
 }

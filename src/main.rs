@@ -32,15 +32,11 @@ struct Args {
     peer_addresses: Vec<String>,
 }
 
-pub mod charm {
-    tonic::include_proto!("raft");
-}
-
-
-
 
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+
+
 
 }
