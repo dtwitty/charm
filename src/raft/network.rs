@@ -1,18 +1,20 @@
 use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, Message, RequestVoteRequest, RequestVoteResponse};
 use crate::raft::network::charm::{AppendEntriesRequestPb, AppendEntriesResponsePb, LogEntryPb, RequestVoteRequestPb, RequestVoteResponsePb};
+use crate::raft::node::RaftNode;
 use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
+use std::sync::{Arc, RwLock};
 
 pub mod charm {
     tonic::include_proto!("raftpb");
 }
 
 pub struct Network {
+    node: Arc<RwLock<RaftNode>>,
 }
 
 
 impl Network {
     pub fn send(&self, node_id: &NodeId, message: &Message) {
-        todo!();
     }
 }
 
