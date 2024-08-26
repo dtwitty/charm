@@ -261,14 +261,14 @@ impl RaftNode<> {
         }
     }
 
-    fn handle_append_entries_request(&mut self, req: AppendEntriesRequest) {
+    fn handle_append_entries_request(&mut self, req: AppendEntriesRequest) -> AppendEntriesResponse {
         debug!("Received AppendEntriesRequest: {:?}", req);
         self.check_incoming_term(req.term);
 
         if req.term < self.current_term {
             // This request is out of date.
             debug!("Request has older term. Failing request.");
-            return self.send_append_entries_response(&req.leader_id, false);
+            return self.append_entries_response(&req.leader_id, false);
         }
 
         if let Candidate(_) = self.role {
@@ -284,21 +284,21 @@ impl RaftNode<> {
             self.reset_election_timer();
             self.log.append_all(req.entries, Index(0));
             self.commit_index = req.leader_commit.min(self.log.last_index());
-            return self.send_append_entries_response(&req.leader_id, true);
+            return self.append_entries_response(&req.leader_id, true);
         }
 
         let prev_log_entry = self.log.get(req.prev_log_index);
         if prev_log_entry.is_none() {
             // We don't have the previous log entry.
             debug!("Previous log entry not found. Failing request.");
-            return self.send_append_entries_response(&req.leader_id, false);
+            return self.append_entries_response(&req.leader_id, false);
         }
 
         let prev_log_term = prev_log_entry.unwrap().term;
         if prev_log_term != req.prev_log_term {
             // The previous log term doesn't match.
             debug!("Previous log term doesn't match. Failing request.");
-            return self.send_append_entries_response(&req.leader_id, false);
+            return self.append_entries_response(&req.leader_id, false);
         }
 
         // The previous log term matches. Append the new entries.
@@ -311,17 +311,16 @@ impl RaftNode<> {
         }
 
         debug!("Sending successful response.");
-        self.send_append_entries_response(&req.leader_id, true);
+        self.append_entries_response(&req.leader_id, true)
     }
 
-    fn send_append_entries_response(&self, leader_id: &NodeId, success: bool) {
-        let res = AppendEntriesResponse {
+    fn append_entries_response(&self, leader_id: &NodeId, success: bool) -> AppendEntriesResponse {
+        AppendEntriesResponse {
             node_id: self.node_id().clone(),
             term: self.current_term,
             success,
             last_log_index: self.log.last_index(),
-        };
-        self.network.send(leader_id, &Message::AppendEntriesResponse(res));
+        }
     }
 
     fn handle_append_entries_response(&mut self, res: AppendEntriesResponse) {
@@ -356,8 +355,7 @@ impl RaftNode<> {
     }
 
 
-
-    fn handle_request_vote_request(&mut self, req: RequestVoteRequest) {
+    fn handle_request_vote_request(&mut self, req: RequestVoteRequest) -> RequestVoteResponse {
         debug!("Received RequestVoteRequest: {:?}", req);
 
         self.check_incoming_term(req.term);
@@ -365,7 +363,7 @@ impl RaftNode<> {
         if req.term < self.current_term {
             // This candidate is out of date.
             debug!("Candidate has older term. Failing vote request.");
-            return self.send_failed_vote_response(&req.candidate_id);
+            return self.request_vote_response(&req.candidate_id, false);
         }
 
         let can_vote = match self.voted_for {
@@ -375,7 +373,7 @@ impl RaftNode<> {
         if !can_vote {
             // We already voted for someone else.
             debug!("Already voted for another candidate. Failing vote request.");
-            return self.send_failed_vote_response(&req.candidate_id);
+            return self.request_vote_response(&req.candidate_id, false);
         }
 
         // Check last entry terms.
@@ -384,7 +382,8 @@ impl RaftNode<> {
         if candidate_last_log_term > our_last_log_term {
             // The candidate has a higher term, so we approve!
             debug!("Candidate has higher term. Voting for candidate {:?}.", req.candidate_id);
-            return self.vote_for(&req.candidate_id);
+            self.vote_for(&req.candidate_id);
+            return self.request_vote_response(&req.candidate_id, true);
         }
 
         // If the terms are the same, we need to check the log lengths.
@@ -393,22 +392,23 @@ impl RaftNode<> {
         if candidate_last_log_index >= our_last_log_index {
             // The candidate has at least as much log as we do, so we approve!
             debug!("Candidate has at least as much log as we do. Voting for candidate {:?}.", req.candidate_id);
-            return self.vote_for(&req.candidate_id);
+            self.vote_for(&req.candidate_id);
+            return self.request_vote_response(&req.candidate_id, true);
         }
 
         // If we get here, the candidate's log is shorter than ours.
         debug!("Candidate has shorter log. Failing vote request.");
-        self.send_failed_vote_response(&req.candidate_id);
+        self.request_vote_response(&req.candidate_id, false)
     }
 
-    fn send_failed_vote_response(&self, candidate_id: &NodeId) {
-        let res = RequestVoteResponse {
+    fn request_vote_response(&self, candidate_id: &NodeId, vote_granted: bool) -> RequestVoteResponse {
+        RequestVoteResponse {
             node_id: self.node_id().clone(),
             term: self.current_term,
-            vote_granted: false,
-        };
-        self.network.send(candidate_id, &Message::RequestVoteResponse(res));
+            vote_granted,
+        }
     }
+
 
     fn vote_for(&mut self, candidate_id: &NodeId) {
         self.voted_for = Some(candidate_id.clone());
@@ -416,13 +416,6 @@ impl RaftNode<> {
         let election_timeout = self.get_election_timeout();
         let role = Follower(FollowerState { election_timer: sleep(election_timeout).shared() });
         self.role = role;
-
-        let res = RequestVoteResponse {
-            node_id: self.node_id().clone(),
-            term: self.current_term,
-            vote_granted: true,
-        };
-        self.network.send(candidate_id, &Message::RequestVoteResponse(res));
     }
 
     fn handle_request_vote_response(&mut self, res: RequestVoteResponse) {
