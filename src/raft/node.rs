@@ -90,7 +90,7 @@ Implement applying logs to a state machine.
 
  */
 
-pub struct RaftNode<N> {
+pub struct RaftNode {
     config: RaftConfig,
 
     /// The current term of the node.
@@ -115,7 +115,7 @@ pub struct RaftNode<N> {
     role: Role,
 
     /// An interface for sending messages to other nodes.
-    network: N,
+    network: Network,
 
     /// For receiving messages from other nodes.
     message_receiver: UnboundedReceiver<Message>,
@@ -125,16 +125,16 @@ pub struct RaftNode<N> {
 
 }
 
-impl<N: Network> RaftNode<N> {
+impl RaftNode<> {
     #[tracing::instrument(fields(node_id = config.node_id.0.clone()), skip_all)]
-    pub async fn run(config: RaftConfig, network: N, message_receiver: UnboundedReceiver<Message>, request_receiver: UnboundedReceiver<RaftRequest>) {
+    pub async fn run(config: RaftConfig, network: Network, message_receiver: UnboundedReceiver<Message>, request_receiver: UnboundedReceiver<RaftRequest>) {
         let mut node = RaftNode::new(config, network, message_receiver, request_receiver);
         loop {
             node.tick().await;
         }
     }
 
-    pub fn new(config: RaftConfig, network: N, message_receiver: UnboundedReceiver<Message>, request_receiver: UnboundedReceiver<RaftRequest>) -> RaftNode<N> {
+    pub fn new(config: RaftConfig, network: Network, message_receiver: UnboundedReceiver<Message>, request_receiver: UnboundedReceiver<RaftRequest>) -> RaftNode {
         let follower_state = FollowerState { election_timer: sleep(config.get_election_timeout()).shared() };
 
         let mut node = RaftNode {

@@ -1,4 +1,5 @@
 use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, Message, RequestVoteRequest, RequestVoteResponse};
+use crate::raft::network::charm::{AppendEntriesRequestPb, AppendEntriesResponsePb, LogEntryPb, RequestVoteRequestPb, RequestVoteResponsePb};
 use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
 
 pub mod charm {
@@ -10,15 +11,9 @@ pub struct Network {
 
 
 impl Network {
-    pub fn send(&self, node_id: NodeId, message: Message) {
+    pub fn send(&self, node_id: &NodeId, message: &Message) {
+        todo!();
     }
-
-    // Send data over UDP to the address in the node id.
-    fn send_raw(node_id: &NodeId, bytes: Vec<u8>) {
-        let remote_addr = node_id.0.parse().unwrap();
-    }
-
-
 }
 
 fn append_entries_request_pb_to_message(request: AppendEntriesRequestPb) -> AppendEntriesRequest {
