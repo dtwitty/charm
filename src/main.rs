@@ -1,8 +1,8 @@
-mod raft;
-
 use std::time::Duration;
 
 use clap::Parser;
+
+mod raft;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -31,6 +31,14 @@ struct Args {
     #[arg(long)]
     peer_addresses: Vec<String>,
 }
+
+pub mod charm {
+    tonic::include_proto!("raft");
+}
+
+use charm::raft_server::*;
+
+
 
 #[tokio::main]
 async fn main() {

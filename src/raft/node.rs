@@ -6,8 +6,6 @@ use futures::FutureExt;
 use rand::Rng;
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::watch;
-use tokio::sync::watch::Sender;
 use tokio::time::{sleep, Sleep};
 use tracing::{debug, info, trace};
 

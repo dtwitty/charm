@@ -3,8 +3,6 @@ name = "charm"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 madsim = "0.2"
 tracing = "0.1.40"
@@ -17,6 +15,7 @@ clap = { version = "4.5.16", features = ["derive"] }
 humantime = "2.1.0"
 tonic = "0.12.1"
 prost = "0.13.1"
+async-stream = "0.3.5"
 
 [build-dependencies]
 tonic-build = "0.12.1"
