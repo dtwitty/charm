@@ -1,4 +1,4 @@
-use crate::raft::network::charm::*;
+use crate::raft::pb::*;
 use crate::raft::types::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,7 +46,12 @@ impl AppendEntriesRequest {
         let leader_id = NodeId(pb.leader_id.clone());
         let prev_log_index = Index(pb.prev_log_index);
         let prev_log_term = Term(pb.prev_log_term);
-        let entries = pb.entries.iter().map(|e| LogEntry::new(e)).collect();
+        let entries = pb.entries.iter().map(|e|
+            LogEntry {
+                term: Term(e.term),
+                data: Data(e.data.clone()),
+            }
+        ).collect();
         let leader_commit = Index(pb.leader_commit);
 
         Self {
@@ -64,7 +69,12 @@ impl AppendEntriesRequest {
         let leader_id = self.leader_id.0.clone();
         let prev_log_index = self.prev_log_index.0;
         let prev_log_term = self.prev_log_term.0;
-        let entries = self.entries.iter().map(|e| e.to_pb()).collect();
+        let entries = self.entries.iter().map(|e|
+            LogEntryPb {
+                term: e.term.0,
+                data: e.data.0.clone(),
+            }
+        ).collect();
         let leader_commit = self.leader_commit.0;
 
         AppendEntriesRequestPb {
