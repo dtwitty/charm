@@ -4,12 +4,20 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Receiver;
 
-#[derive(Debug, Clone)]
-pub struct RaftCoreHandle {
-    tx: UnboundedSender<CoreQueueEntry>,
+#[derive(Debug)]
+pub struct RaftCoreHandle<R: Send + 'static> {
+    tx: UnboundedSender<CoreQueueEntry<R>>,
 }
 
-impl RaftCoreHandle {
+impl <R: Send + 'static> Clone for RaftCoreHandle<R> {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+        }
+    }
+}
+
+impl<R: Send + 'static> RaftCoreHandle<R> {
     pub fn append_entries_request(&self, request: AppendEntriesRequest) -> Receiver<AppendEntriesResponse> {
         let (response_tx, rx) = oneshot::channel();
         let entry = CoreQueueEntry::AppendEntriesRequest {

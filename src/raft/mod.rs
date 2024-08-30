@@ -5,5 +5,5 @@ pub mod config;
 pub mod log;
 mod pb;
 pub mod core;
-mod network;
-mod state_machine;
+pub mod network;
+pub mod state_machine;

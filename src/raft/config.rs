@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use derive_builder::Builder;
-use rand::Rng;
-
+use madsim::rand;
+use madsim::rand::Rng;
 use crate::raft::types::NodeId;
 
 #[derive(Debug, Clone, PartialEq, Builder)]

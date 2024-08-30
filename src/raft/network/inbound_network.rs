@@ -6,12 +6,12 @@ use crate::raft::types::NodeId;
 use tonic::{async_trait, Request, Response, Status};
 
 #[derive(Debug)]
-struct InboundNetwork {
-    handle: RaftCoreHandle,
+struct InboundNetwork<R: Send + 'static> {
+    handle: RaftCoreHandle<R>,
 }
 
 #[async_trait]
-impl Raft for InboundNetwork {
+impl<R: Send + 'static> Raft for InboundNetwork<R> {
     async fn append_entries(&self, request: Request<AppendEntriesRequestPb>) -> Result<Response<AppendEntriesResponsePb>, Status> {
         let request_pb = request.into_inner();
         let request = AppendEntriesRequest::from_pb(&request_pb);
@@ -31,7 +31,7 @@ impl Raft for InboundNetwork {
     }
 }
 
-async fn run_inbound_network(node_id: NodeId, handle: RaftCoreHandle) {
+async fn run_inbound_network<R: Send + 'static>(node_id: NodeId, handle: RaftCoreHandle<R>) {
     let addr = node_id.0.parse().unwrap();
     let network = InboundNetwork { handle };
     tonic::transport::Server::builder()

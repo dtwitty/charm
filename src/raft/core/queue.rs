@@ -2,7 +2,7 @@ use crate::raft::messages::*;
 use tokio::sync::oneshot;
 
 #[derive(Debug)]
-pub enum CoreQueueEntry {
+pub enum CoreQueueEntry<R: Send + 'static> {
     AppendEntriesRequest {
         request: AppendEntriesRequest,
         response_tx: oneshot::Sender<AppendEntriesResponse>,
@@ -15,4 +15,6 @@ pub enum CoreQueueEntry {
 
     AppendEntriesResponse(AppendEntriesResponse),
     RequestVoteResponse(RequestVoteResponse),
+
+    Propose(R),
 }

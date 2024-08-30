@@ -13,7 +13,7 @@ enum RaftRequest {
     RequestVote(RequestVoteRequest),
 }
 
-struct OutboundNetworkHandle {
+pub struct OutboundNetworkHandle {
     tx: UnboundedSender<(NodeId, RaftRequest)>,
 }
 
@@ -27,7 +27,7 @@ impl OutboundNetworkHandle {
     }
 }
 
-pub fn run_outbound_network(handle: RaftCoreHandle, mut rx: UnboundedReceiver<(NodeId, RaftRequest)>) {
+pub fn run_outbound_network<R: Send + 'static>(handle: RaftCoreHandle<R>, mut rx: UnboundedReceiver<(NodeId, RaftRequest)>) {
     spawn(async move {
 
         // Holds the clients for each node.
