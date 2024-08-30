@@ -118,7 +118,7 @@ pub struct RaftNode {
     network: Network,
 
     /// For receiving messages from other nodes.
-    message_receiver: UnboundedReceiver<Message>,
+    message_receiver: UnboundedReceiver<RaftMessage>,
 
     /// For handling requests.
     request_receiver: UnboundedReceiver<RaftRequest>,
@@ -127,14 +127,14 @@ pub struct RaftNode {
 
 impl RaftNode<> {
     #[tracing::instrument(fields(node_id = config.node_id.0.clone()), skip_all)]
-    pub async fn run(config: RaftConfig, network: Network, message_receiver: UnboundedReceiver<Message>, request_receiver: UnboundedReceiver<RaftRequest>) {
+    pub async fn run(config: RaftConfig, network: Network, message_receiver: UnboundedReceiver<RaftMessage>, request_receiver: UnboundedReceiver<RaftRequest>) {
         let mut node = RaftNode::new(config, network, message_receiver, request_receiver);
         loop {
             node.tick().await;
         }
     }
 
-    pub fn new(config: RaftConfig, network: Network, message_receiver: UnboundedReceiver<Message>, request_receiver: UnboundedReceiver<RaftRequest>) -> RaftNode {
+    pub fn new(config: RaftConfig, network: Network, message_receiver: UnboundedReceiver<RaftMessage>, request_receiver: UnboundedReceiver<RaftRequest>) -> RaftNode {
         let follower_state = FollowerState { election_timer: sleep(config.get_election_timeout()).shared() };
 
         let mut node = RaftNode {
@@ -204,21 +204,21 @@ impl RaftNode<> {
         }
     }
 
-    fn handle_message(&mut self, message: Message) {
+    fn handle_message(&mut self, message: RaftMessage) {
         match message {
-            Message::AppendEntriesRequest(req) => {
+            RaftMessage::Request::AppendEntriesRequest(req) => {
                 self.handle_append_entries_request(req);
             }
 
-            Message::AppendEntriesResponse(res) => {
+            RaftMessage::Response::AppendEntriesResponse(res) => {
                 self.handle_append_entries_response(res);
             }
 
-            Message::RequestVoteRequest(req) => {
+            RaftMessage::Request::RequestVoteRequest(req) => {
                 self.handle_request_vote_request(req);
             }
 
-            Message::RequestVoteResponse(res) => {
+            RaftMessage::Response::RequestVoteResponse(res) => {
                 self.handle_request_vote_response(res);
             }
         }
@@ -248,7 +248,7 @@ impl RaftNode<> {
         };
 
         for node_id in &self.config.other_nodes {
-            self.network.send(&node_id, &Message::RequestVoteRequest(req.clone()));
+            self.network.send(&node_id, &RaftMessage::Request::RequestVoteRequest(req.clone()));
         }
     }
 
@@ -493,7 +493,7 @@ impl RaftNode<> {
                 leader_commit: self.commit_index,
             };
 
-            self.network.send(node_id, &Message::AppendEntriesRequest(req));
+            self.network.send(node_id, &RaftMessage::Request::AppendEntriesRequest(req));
         }
     }
 

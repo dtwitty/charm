@@ -1,4 +1,4 @@
-use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, Message, RequestVoteRequest, RequestVoteResponse};
+use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, RaftMessage, RequestVoteRequest, RequestVoteResponse};
 use crate::raft::network::charm::{AppendEntriesRequestPb, AppendEntriesResponsePb, LogEntryPb, RequestVoteRequestPb, RequestVoteResponsePb};
 use crate::raft::node::RaftNode;
 use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
@@ -14,7 +14,7 @@ pub struct Network {
 
 
 impl Network {
-    pub fn send(&self, node_id: &NodeId, message: &Message) {
+    pub fn send(&self, node_id: &NodeId, message: &RaftMessage) {
     }
 }
 
