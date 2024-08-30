@@ -2,24 +2,6 @@ use crate::raft::pb::*;
 use crate::raft::types::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RaftMessage {
-    Request(RaftRequest),
-    Response(RaftResponse),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RaftRequest {
-    AppendEntriesRequest(AppendEntriesRequest),
-    RequestVoteRequest(RequestVoteRequest),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RaftResponse {
-    AppendEntriesResponse(AppendEntriesResponse),
-    RequestVoteResponse(RequestVoteResponse),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppendEntriesRequest {
     /// The leader's term.
     pub term: Term,

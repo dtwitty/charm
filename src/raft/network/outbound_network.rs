@@ -1,28 +1,33 @@
+use crate::raft::core::handle::RaftCoreHandle;
 use crate::raft::messages::*;
 use crate::raft::pb::raft_client::RaftClient;
 use crate::raft::types::NodeId;
 use std::collections::HashMap;
 use tokio::spawn;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tonic::transport::Channel;
 use tonic::Request;
 
-mod charm {}
+enum RaftRequest {
+    AppendEntries(AppendEntriesRequest),
+    RequestVote(RequestVoteRequest),
+}
 
-
-pub struct OutboundNetworkHandle {
-    /// For sending messages out to the network.
+struct OutboundNetworkHandle {
     tx: UnboundedSender<(NodeId, RaftRequest)>,
 }
 
 impl OutboundNetworkHandle {
-    pub fn send(&self, node_id: NodeId, message: RaftRequest) {
-        self.tx.send((node_id, message)).unwrap();
+    pub fn append_entries(&self, node_id: NodeId, request: AppendEntriesRequest) {
+        self.tx.send((node_id, RaftRequest::AppendEntries(request))).unwrap();
+    }
+
+    pub fn request_vote(&self, node_id: NodeId, request: RequestVoteRequest) {
+        self.tx.send((node_id, RaftRequest::RequestVote(request))).unwrap();
     }
 }
 
-pub fn run_outbound_network(core_tx: UnboundedSender<RaftMessage>) -> OutboundNetworkHandle {
-    let (tx, mut rx) = unbounded_channel();
+pub fn run_outbound_network(handle: RaftCoreHandle, mut rx: UnboundedReceiver<(NodeId, RaftRequest)>) {
     spawn(async move {
 
         // Holds the clients for each node.
@@ -37,33 +42,32 @@ pub fn run_outbound_network(core_tx: UnboundedSender<RaftMessage>) -> OutboundNe
             }
 
             let mut client = clients.get_mut(&node_id).unwrap().clone();
-            let core_tx_clone = core_tx.clone();
+            let handle_clone = handle.clone();
             spawn(async move {
                 match request {
-                    RaftRequest::AppendEntriesRequest(request) => {
+                    RaftRequest::AppendEntries(request) => {
                         let request_pb = request.to_pb();
                         let request = Request::new(request_pb);
                         if let Ok(response) = client.append_entries(request).await {
                             let response_pb = response.into_inner();
                             let response = AppendEntriesResponse::from_pb(&response_pb);
-                            core_tx_clone.send(RaftMessage::Response(RaftResponse::AppendEntriesResponse(response))).unwrap();
+                            handle_clone.append_entries_response(response);
                         }
                     }
 
-                    RaftRequest::RequestVoteRequest(request) => {
+                    RaftRequest::RequestVote(request) => {
                         let request_pb = request.to_pb();
                         let request = Request::new(request_pb);
                         if let Ok(response) = client.request_vote(request).await {
                             let response_pb = response.into_inner();
                             let response = RequestVoteResponse::from_pb(&response_pb);
-                            core_tx_clone.send(RaftMessage::Response(RaftResponse::RequestVoteResponse(response))).unwrap();
+                            handle_clone.request_vote_response(response);
                         }
                     }
                 }
             });
         }
     });
-    OutboundNetworkHandle { tx }
 }
 
 async fn create_client(node_id: NodeId) -> RaftClient<Channel> {
