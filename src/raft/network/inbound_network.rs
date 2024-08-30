@@ -3,12 +3,14 @@ use crate::raft::messages::{AppendEntriesRequest, RequestVoteRequest};
 use crate::raft::pb::raft_server::{Raft, RaftServer};
 use crate::raft::pb::{AppendEntriesRequestPb, AppendEntriesResponsePb, RequestVoteRequestPb, RequestVoteResponsePb};
 use crate::raft::types::NodeId;
-use tonic::{Request, Response, Status};
+use tonic::{async_trait, Request, Response, Status};
 
+#[derive(Debug)]
 struct InboundNetwork {
     handle: RaftCoreHandle,
 }
 
+#[async_trait]
 impl Raft for InboundNetwork {
     async fn append_entries(&self, request: Request<AppendEntriesRequestPb>) -> Result<Response<AppendEntriesResponsePb>, Status> {
         let request_pb = request.into_inner();

@@ -13,7 +13,7 @@ graph TD
             (external requests)
         `")
         RS("`
-            Raft Server
+            Inbound Network 
             (incoming Raft requests)
         `")
         SM("`
@@ -25,7 +25,7 @@ graph TD
             (drives Raft protocol)
         `")
         RC("`
-            Raft Clients
+            Outbound Network 
             (outgoing Raft requests)
         `")
         AP -- State Machine Requests --> CO
@@ -54,17 +54,17 @@ The raft core has a single queue for incoming interactions with other components
 
 The raft core also manages its own timers, deciding when to send heartbeats, when to start elections, etc.
 
-## Raft Server
+## Inbound Network
 
-The raft server handles incoming Raft GRPC requests from other nodes.
+The inbound network handles incoming Raft GRPC requests from other nodes.
 
 It forwards these requests to the core, and gets responses back on oneshot channels.
 
 The tonic server is typically multithreaded, but the core's queue will serialize requests.
 
-## Raft Clients
+## Outbound Network
 
-The raft client component is responsible for sending Raft GRPC requests to other nodes.
+The outbound network component is responsible for sending Raft GRPC requests to other nodes.
 
 It maintains a GRPC client for each other node in the cluster, and handles reconnecting if the connection is lost.
 
