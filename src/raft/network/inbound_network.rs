@@ -3,6 +3,7 @@ use crate::raft::messages::{AppendEntriesRequest, RequestVoteRequest};
 use crate::raft::pb::raft_server::{Raft, RaftServer};
 use crate::raft::pb::{AppendEntriesRequestPb, AppendEntriesResponsePb, RequestVoteRequestPb, RequestVoteResponsePb};
 use crate::raft::types::NodeId;
+use tokio::spawn;
 use tonic::{async_trait, Request, Response, Status};
 
 #[derive(Debug)]
@@ -31,12 +32,14 @@ impl<R: Send + 'static> Raft for InboundNetwork<R> {
     }
 }
 
-async fn run_inbound_network<R: Send + 'static>(node_id: NodeId, handle: RaftCoreHandle<R>) {
+pub fn run_inbound_network<R: Send + 'static>(node_id: NodeId, handle: RaftCoreHandle<R>) {
     let addr = node_id.0.parse().unwrap();
     let network = InboundNetwork { handle };
-    tonic::transport::Server::builder()
-        .add_service(RaftServer::new(network))
-        .serve(addr)
-        .await
-        .unwrap();
+    spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(RaftServer::new(network))
+            .serve(addr)
+            .await
+            .unwrap();
+    });
 }

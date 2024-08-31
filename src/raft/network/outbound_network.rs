@@ -8,7 +8,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tonic::transport::Channel;
 use tonic::Request;
 
-enum RaftRequest {
+pub enum RaftRequest {
     AppendEntries(AppendEntriesRequest),
     RequestVote(RequestVoteRequest),
 }
@@ -18,6 +18,10 @@ pub struct OutboundNetworkHandle {
 }
 
 impl OutboundNetworkHandle {
+    pub fn new(tx: UnboundedSender<(NodeId, RaftRequest)>) -> Self {
+        Self { tx }
+    }
+
     pub fn append_entries(&self, node_id: NodeId, request: AppendEntriesRequest) {
         self.tx.send((node_id, RaftRequest::AppendEntries(request))).unwrap();
     }

@@ -13,6 +13,10 @@ pub struct StateMachineHandle<R> {
 }
 
 impl<R> StateMachineHandle<R> {
+    pub fn new(tx: UnboundedSender<R>) -> Self {
+        Self { tx }
+    }
+
     pub fn apply(&self, request: R) {
         self.tx.send(request).unwrap();
     }

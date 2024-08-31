@@ -1,30 +1,37 @@
-use crate::raft::config::RaftConfig;
+use crate::raft::core::error::RaftCoreError;
 use crate::raft::core::queue::CoreQueueEntry;
 use crate::raft::core::Role::{Candidate, Follower, Leader};
-use crate::raft::log::Log;
 use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, RequestVoteRequest, RequestVoteResponse};
 use crate::raft::network::outbound_network::OutboundNetworkHandle;
 use crate::raft::state_machine::StateMachineHandle;
 use crate::raft::types::{Index, NodeId, Term};
+use config::RaftConfig;
+use log::Log;
+use madsim::export::futures::future::Shared;
+use madsim::export::futures::FutureExt;
 use madsim::rand;
 use madsim::rand::Rng;
 use std::collections::HashMap;
 use std::time::Duration;
-use madsim::export::futures::future::Shared;
-use madsim::export::futures::FutureExt;
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{sleep, Sleep};
-use tracing::{debug, info, trace};
+use tracing::{debug, error, info, trace};
 
 pub mod handle;
 mod queue;
-
+mod log;
+//pub mod node;
+pub mod config;
+pub mod error;
 
 struct FollowerState {
     /// The timer that will fire when the election timeout is reached.
     /// This is used to start a new election.
     election_timer: Shared<Sleep>,
+
+    /// Who we think the leader is.
+    leader_id: Option<NodeId>,
 }
 
 struct CandidateState {
@@ -127,7 +134,8 @@ impl<R: Send + 'static> RaftNode<R> {
     pub fn new(
         config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>) -> RaftNode<R> {
         let follower_state = FollowerState {
-            election_timer: sleep(config.get_election_timeout()).shared()
+            election_timer: sleep(config.get_election_timeout()).shared(),
+            leader_id: None,
         };
 
         let mut node = RaftNode {
@@ -217,8 +225,9 @@ impl<R: Send + 'static> RaftNode<R> {
                 self.handle_request_vote_response(response);
             }
 
-            CoreQueueEntry::Propose(request) => {
-                self.handle_propose(request);
+            CoreQueueEntry::Propose { proposal, error_tx } => {
+                let result = self.handle_propose(proposal);
+                error_tx.send(result).unwrap();
             }
         }
     }
@@ -270,9 +279,14 @@ impl<R: Send + 'static> RaftNode<R> {
             return self.append_entries_response(false);
         }
 
+        if let Leader(_) = self.role {
+            error!("Another load claims to be leader with the same term! This should never happen.");
+            self.convert_to_follower();
+        }
+
         if let Candidate(_) = self.role {
             // Someone else in the same term became a leader before us.
-            debug!("Another node became leader. Converting to follower.");
+            info!("Another node became leader. Converting to follower.");
             self.convert_to_follower();
         }
 
@@ -283,6 +297,7 @@ impl<R: Send + 'static> RaftNode<R> {
             self.reset_election_timer();
             self.log.append_all(req.entries, Index(0));
             self.commit_index = req.leader_commit.min(self.log.last_index());
+            self.update_leader(req.leader_id.clone());
             return self.append_entries_response(true);
         }
 
@@ -310,6 +325,8 @@ impl<R: Send + 'static> RaftNode<R> {
         }
 
         debug!("Sending successful response.");
+        // This check should always succeed.
+        self.update_leader(req.leader_id.clone());
         self.append_entries_response(true)
     }
 
@@ -413,7 +430,7 @@ impl<R: Send + 'static> RaftNode<R> {
         self.voted_for = Some(candidate_id.clone());
 
         let election_timeout = self.get_election_timeout();
-        let role = Follower(FollowerState { election_timer: sleep(election_timeout).shared() });
+        let role = Follower(FollowerState { election_timer: sleep(election_timeout).shared(), leader_id: None });
         self.role = role;
     }
 
@@ -447,8 +464,20 @@ impl<R: Send + 'static> RaftNode<R> {
         }
     }
 
-    fn handle_propose(&mut self, request: R) {
-        todo!()
+    fn handle_propose(&mut self, request: R) -> Result<(), RaftCoreError> {
+        match self.role {
+            Leader(ref mut leader_state) => {
+                todo!()
+            }
+
+            Candidate { .. } => {
+                Err(RaftCoreError::NotLeader { leader_id: None })
+            }
+
+            Follower { .. } => {
+                Err(RaftCoreError::NotLeader { leader_id: None })
+            }
+        }
     }
 
     fn become_leader(&mut self) {
@@ -511,9 +540,17 @@ impl<R: Send + 'static> RaftNode<R> {
 
     fn convert_to_follower(&mut self) {
         self.voted_for = None;
-        let follower_state = FollowerState { election_timer: sleep(self.get_election_timeout()).shared() };
+        let follower_state = FollowerState { election_timer: sleep(self.get_election_timeout()).shared(), leader_id: None };
         let role = Follower(follower_state);
         self.role = role;
+    }
+
+    fn update_leader(&mut self, leader_id: NodeId) {
+        if let Follower(ref mut follower_state) = self.role {
+            follower_state.leader_id = Some(leader_id);
+        } else {
+            panic!("Expected follower role.");
+        }
     }
 
     fn get_election_timeout(&self) -> Duration {
@@ -546,11 +583,17 @@ impl<R: Send + 'static> RaftNode<R> {
 }
 
 #[tracing::instrument(fields(node_id = config.node_id.0.clone()), skip_all)]
-pub async fn run<R: Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>) {
+async fn run<R: Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>) {
     let mut node = RaftNode::new(config, core_rx, outbound_network, state_machine);
     loop {
         node.tick().await;
     }
 }
+
+pub fn run_core<R: Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>) {
+    tokio::spawn(run(config, core_rx, outbound_network, state_machine));
+}
+
+
 
 

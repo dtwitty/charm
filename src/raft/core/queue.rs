@@ -1,5 +1,6 @@
 use crate::raft::messages::*;
 use tokio::sync::oneshot;
+use crate::raft::core::error::RaftCoreError;
 
 #[derive(Debug)]
 pub enum CoreQueueEntry<R: Send + 'static> {
@@ -16,5 +17,8 @@ pub enum CoreQueueEntry<R: Send + 'static> {
     AppendEntriesResponse(AppendEntriesResponse),
     RequestVoteResponse(RequestVoteResponse),
 
-    Propose(R),
+    Propose {
+        proposal: R,
+        error_tx: oneshot::Sender<Result<(), RaftCoreError>>,
+    },
 }
