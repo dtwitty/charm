@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::future::pending;
 use std::time::Duration;
 
 use crate::raft::core::config::RaftConfig;
 use crate::raft::run_raft;
 use clap::Parser;
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::oneshot;
 use tonic::async_trait;
@@ -43,10 +43,24 @@ struct StateMachine {
     map: HashMap<String, String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
 enum StateMachineRequest {
-    Get(String, oneshot::Sender<Option<String>>),
-    Set(String, String, oneshot::Sender<String>),
-    Delete(String, oneshot::Sender<Option<String>>),
+    Get {
+        key: String,
+        #[serde(skip)]
+        response: Option<oneshot::Sender<Option<String>>>,
+    },
+    Set {
+        key: String,
+        value: String,
+        #[serde(skip)]
+        response: Option<oneshot::Sender<Option<String>>>,
+    },
+    Delete {
+        key: String,
+        #[serde(skip)]
+        response: Option<oneshot::Sender<Option<String>>>,
+    }
 }
 
 #[async_trait]
@@ -55,17 +69,23 @@ impl raft::state_machine::StateMachine for StateMachine {
 
     async fn apply(&mut self, request: Self::Request) {
         match request {
-            StateMachineRequest::Get(key, tx) => {
+            StateMachineRequest::Get { key, response: tx } => {
                 let value = self.map.get(&key).cloned();
-                tx.send(value).unwrap();
+                if let Some(tx) = tx {
+                    tx.send(value).unwrap();
+                }
             }
-            StateMachineRequest::Set(key, value, tx) => {
+            StateMachineRequest::Set { key, value, response: tx } => {
                 let old_value = self.map.insert(key, value);
-                tx.send(old_value.unwrap_or_default()).unwrap();
+                if let Some(tx) = tx {
+                    tx.send(old_value).unwrap();
+                }
             }
-            StateMachineRequest::Delete(key, tx) => {
+            StateMachineRequest::Delete { key, response: tx } => {
                 let value = self.map.remove(&key);
-                tx.send(value).unwrap();
+                if let Some(tx) = tx {
+                    tx.send(value).unwrap();
+                }
             }
         }
     }
@@ -103,7 +123,7 @@ async fn main() {
                 let key = parts.next().unwrap().to_string();
                 let (tx, rx) = oneshot::channel();
 
-                let commit=raft_handle.propose(StateMachineRequest::Get(key, tx)).await;
+                let commit = raft_handle.propose(StateMachineRequest::Get { key, response: Some(tx) }).await;
                 if let Err(e) = commit {
                     println!("Error: {:?}", e);
                     continue;
@@ -118,7 +138,7 @@ async fn main() {
                 let value = parts.next().unwrap().to_string();
                 let (tx, rx) = oneshot::channel();
 
-                let commit=raft_handle.propose(StateMachineRequest::Set(key, value, tx)).await;
+                let commit = raft_handle.propose(StateMachineRequest::Set { key, value, response: Some(tx) }).await;
                 if let Err(e) = commit {
                     println!("Error: {:?}", e);
                     continue;
@@ -132,7 +152,7 @@ async fn main() {
                 let key = parts.next().unwrap().to_string();
                 let (tx, rx) = oneshot::channel();
 
-                let commit=raft_handle.propose(StateMachineRequest::Delete(key, tx)).await;
+                let commit = raft_handle.propose(StateMachineRequest::Delete { key, response: Some(tx) }).await;
                 if let Err(e) = commit {
                     println!("Error: {:?}", e);
                     continue;

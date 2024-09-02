@@ -19,6 +19,6 @@ pub enum CoreQueueEntry<R: Send + 'static> {
 
     Propose {
         proposal: R,
-        error_tx: oneshot::Sender<Result<(), RaftCoreError>>,
+        commit_tx: oneshot::Sender<Result<(), RaftCoreError>>,
     },
 }

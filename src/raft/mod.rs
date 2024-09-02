@@ -1,3 +1,5 @@
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use crate::raft::core::config::RaftConfig;
 use crate::raft::core::error::RaftCoreError;
 use crate::raft::core::handle::RaftCoreHandle;
@@ -39,7 +41,10 @@ impl<R: Send + 'static> RaftHandle<R> {
     }
 }
 
-pub fn run_raft<S: StateMachine>(config: RaftConfig, state_machine: S) -> RaftHandle<S::Request> {
+pub fn run_raft<S: StateMachine>(config: RaftConfig, state_machine: S) -> RaftHandle<S::Request>
+where
+    S::Request: Serialize + DeserializeOwned + Send + 'static,
+{
     let (to_core_tx, to_core_rx) = unbounded_channel();
     let raft_handle = RaftHandle { core_handle: RaftCoreHandle::new(to_core_tx) };
     let (to_outbound_tx, to_outbound_rx) = unbounded_channel();

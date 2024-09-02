@@ -4,19 +4,23 @@ use crate::raft::core::Role::{Candidate, Follower, Leader};
 use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, RequestVoteRequest, RequestVoteResponse};
 use crate::raft::network::outbound_network::OutboundNetworkHandle;
 use crate::raft::state_machine::StateMachineHandle;
-use crate::raft::types::{Index, NodeId, Term};
+use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
 use config::RaftConfig;
 use log::Log;
 use madsim::export::futures::future::Shared;
 use madsim::export::futures::FutureExt;
 use madsim::rand;
 use madsim::rand::Rng;
-use std::collections::HashMap;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use std::collections::{BTreeMap, HashMap};
+use std::mem::swap;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::oneshot;
 use tokio::time::{sleep, Sleep};
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 pub mod handle;
 mod queue;
@@ -101,7 +105,7 @@ Implement applying logs to a state machine.
 
  */
 
-pub struct RaftNode<R: Send + 'static> {
+pub struct RaftNode<R: Serialize + DeserializeOwned + Send + 'static> {
     config: RaftConfig,
 
     /// The current term of the node.
@@ -117,10 +121,6 @@ pub struct RaftNode<R: Send + 'static> {
     /// Initialized to 0, increases monotonically.
     commit_index: Index,
 
-    /// The index of the highest log entry applied to the state machine.
-    /// Initialized to 0, increases monotonically.
-    last_applied: Index,
-
     /// State that only exists if this node is a leader.
     /// If this node is not a leader, this field is `None`.
     role: Role,
@@ -128,15 +128,17 @@ pub struct RaftNode<R: Send + 'static> {
     core_rx: UnboundedReceiver<CoreQueueEntry<R>>,
     outbound_network: OutboundNetworkHandle,
     state_machine: StateMachineHandle<R>,
+    propose_futures: BTreeMap<Index, oneshot::Sender<Result<(), RaftCoreError>>>
 }
 
-impl<R: Send + 'static> RaftNode<R> {
+impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
     pub fn new(
         config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>) -> RaftNode<R> {
         let follower_state = FollowerState {
             election_timer: sleep(config.get_election_timeout()).shared(),
             leader_id: None,
         };
+        let propose_futures = BTreeMap::new();
 
         let mut node = RaftNode {
             config,
@@ -144,11 +146,11 @@ impl<R: Send + 'static> RaftNode<R> {
             voted_for: None,
             log: Log::new(),
             commit_index: Index(0),
-            last_applied: Index(0),
             role: Follower(follower_state),
             core_rx,
             outbound_network,
             state_machine,
+            propose_futures,
         };
 
         node.reset_election_timer();
@@ -225,9 +227,8 @@ impl<R: Send + 'static> RaftNode<R> {
                 self.handle_request_vote_response(response);
             }
 
-            CoreQueueEntry::Propose { proposal, error_tx } => {
-                let result = self.handle_propose(proposal);
-                error_tx.send(result).unwrap();
+            CoreQueueEntry::Propose { proposal, commit_tx } => {
+                self.handle_propose(proposal, commit_tx);
             }
         }
     }
@@ -295,7 +296,9 @@ impl<R: Send + 'static> RaftNode<R> {
             // The log is empty. We can accept any entries.
             debug!("Log is empty. Accepting request.");
             self.reset_election_timer();
-            self.log.append_all(req.entries, Index(0));
+            for entry in req.entries {
+                self.log.append(entry);
+            }
             self.commit_index = req.leader_commit.min(self.log.last_index());
             self.update_leader(req.leader_id.clone());
             return self.append_entries_response(true);
@@ -318,16 +321,41 @@ impl<R: Send + 'static> RaftNode<R> {
         // The previous log term matches. Append the new entries.
         debug!("Accepting request.");
         self.reset_election_timer();
-        self.log.append_all(req.entries, req.prev_log_index.next());
+        self.check_and_append(&req.leader_id, req.entries, req.prev_log_index.next());
 
         if req.leader_commit > self.commit_index {
             self.commit_index = req.leader_commit.min(self.log.last_index());
         }
 
         debug!("Sending successful response.");
-        // This check should always succeed.
         self.update_leader(req.leader_id.clone());
         self.append_entries_response(true)
+    }
+
+    fn check_and_append(&mut self, leader_id: &NodeId, entries: Vec<LogEntry>, mut prev_log_index: Index) {
+        for entry in entries {
+            if let Some(prev_entry) = self.log.get(prev_log_index) {
+                if prev_entry.term != entry.term {
+                    // There is a conflict. Truncate the log and append the new entry.
+                    warn!("Log conflict detected. Truncating log.");
+                    self.log.truncate(prev_log_index);
+                    // Fail the futures that got truncated.
+                    let to_fail = self.propose_futures.split_off(&prev_log_index);
+                    for (_, tx) in to_fail {
+                        tx.send(Err(RaftCoreError::NotLeader {
+                            leader_id: Some(leader_id.clone()),
+                        })).unwrap();
+                    }
+
+                    self.log.append(entry);
+                }
+            } else {
+                // No conflict, append the entry.
+                self.log.append(entry);
+            }
+
+            prev_log_index = prev_log_index.next();
+        }
     }
 
     fn append_entries_response(&self, success: bool) -> AppendEntriesResponse {
@@ -356,6 +384,20 @@ impl<R: Send + 'static> RaftNode<R> {
                 let majority_match = leader_state.get_majority_match();
                 if majority_match > self.commit_index {
                     debug!("Cluster majority advanced to index {:?}. Updating commit index.", majority_match);
+
+                    // Split off futures that can be completed.
+                    let mut to_complete = self.propose_futures.split_off(&(majority_match.next()));
+                    swap(&mut self.propose_futures, &mut to_complete);
+
+                    // Complete the futures, and send them to the state machine.
+                    for (i, tx) in to_complete {
+                        tx.send(Ok(())).unwrap();
+                        let serialized = &self.log.get(i).unwrap().data.0;
+                        let req = serde_json::from_slice(serialized).unwrap();
+                        self.state_machine.apply(req);
+                    }
+
+                    // Mark that we have committed!
                     self.commit_index = majority_match;
                 }
             } else {
@@ -464,18 +506,23 @@ impl<R: Send + 'static> RaftNode<R> {
         }
     }
 
-    fn handle_propose(&mut self, request: R) -> Result<(), RaftCoreError> {
+    fn handle_propose(&mut self, request: R, commit_tx: oneshot::Sender<Result<(), RaftCoreError>>) {
         match self.role {
-            Leader(ref mut leader_state) => {
-                todo!()
+            Candidate(_) => {
+                let res = Err(RaftCoreError::NotLeader { leader_id: None });
+                commit_tx.send(res).unwrap();
             }
 
-            Candidate { .. } => {
-                Err(RaftCoreError::NotLeader { leader_id: None })
+            Follower(ref follower_state) => {
+                let res = Err(RaftCoreError::NotLeader { leader_id: follower_state.leader_id.clone() });
+                commit_tx.send(res).unwrap();
             }
 
-            Follower { .. } => {
-                Err(RaftCoreError::NotLeader { leader_id: None })
+            Leader(_) => {
+                let serialized = serde_json::to_vec(&request).unwrap();
+                let log_entry = LogEntry { term: self.current_term, data: Data(serialized) };
+                let index = self.log.append(log_entry);
+                self.propose_futures.insert(index, commit_tx);
             }
         }
     }
@@ -583,14 +630,14 @@ impl<R: Send + 'static> RaftNode<R> {
 }
 
 #[tracing::instrument(fields(node_id = config.node_id.0.clone()), skip_all)]
-async fn run<R: Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>) {
+async fn run<R: Serialize + DeserializeOwned + Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>) {
     let mut node = RaftNode::new(config, core_rx, outbound_network, state_machine);
     loop {
         node.tick().await;
     }
 }
 
-pub fn run_core<R: Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>) {
+pub fn run_core<R: Serialize + DeserializeOwned + Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>) {
     tokio::spawn(run(config, core_rx, outbound_network, state_machine));
 }
 

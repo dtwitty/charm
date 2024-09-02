@@ -1,9 +1,9 @@
-use crate::raft::core::queue::{CoreQueueEntry, };
+use crate::raft::core::error::RaftCoreError;
+use crate::raft::core::queue::CoreQueueEntry;
 use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, RequestVoteRequest, RequestVoteResponse};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Receiver;
-use crate::raft::core::error::RaftCoreError;
 
 #[derive(Debug)]
 pub struct RaftCoreHandle<R: Send + 'static> {
@@ -56,10 +56,10 @@ impl<R: Send + 'static> RaftCoreHandle<R> {
     }
 
     pub fn propose(&self, proposal: R) -> Receiver<Result<(), RaftCoreError>> {
-        let (error_tx, rx) = oneshot::channel();
+        let (commit_tx, rx) = oneshot::channel();
         let entry = CoreQueueEntry::Propose {
             proposal,
-            error_tx,
+            commit_tx,
         };
         self.tx.send(entry).unwrap();
         rx
