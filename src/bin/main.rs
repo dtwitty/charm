@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::raft::core::config::RaftConfig;
-use crate::raft::run_raft;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::oneshot;
 use tonic::async_trait;
-
-mod raft;
+use charm::raft;
+use charm::raft::core::config::RaftConfig;
+use charm::raft::run_raft;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]

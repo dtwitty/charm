@@ -81,7 +81,7 @@ async fn run<R: Send + 'static>(handle: RaftCoreHandle<R>, mut rx: UnboundedRece
     }
 }
 
-pub fn run_outbound_network<R: Send + 'static>(handle: RaftCoreHandle<R>, mut rx: UnboundedReceiver<(NodeId, RaftRequest)>) {
+pub fn run_outbound_network<R: Send + 'static>(handle: RaftCoreHandle<R>, rx: UnboundedReceiver<(NodeId, RaftRequest)>) {
     spawn(run(handle, rx));
 }
 

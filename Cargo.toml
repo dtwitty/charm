@@ -3,6 +3,17 @@ name = "charm"
 version = "0.1.0"
 edition = "2021"
 
+[build]
+rustflags = "--cfg madsim"
+
+[[bin]]
+name = "main"
+path = "src/bin/main.rs"
+
+[lib]
+name = "charm"
+path = "src/lib.rs"
+
 [dependencies]
 madsim = "0.2.30"
 tracing = "0.1.40"
