@@ -29,7 +29,12 @@ impl<R: Send + 'static> Clone for RaftHandle<R> {
 }
 
 impl<R: Send + 'static> RaftHandle<R> {
-    fn propose(&self, proposal: R) -> oneshot::Receiver<Result<(), RaftCoreError>> {
+    /// Propose a new entry to be replicated across the cluster. The returned
+    /// `oneshot::Receiver` will be signalled when the proposal has been
+    /// committed. Note that this does not mean the proposal has been applied
+    /// to the state machine. It is up to the caller to pass their own method of handle
+    /// the result of the proposal being applied to the state machine.
+    pub fn propose(&self, proposal: R) -> oneshot::Receiver<Result<(), RaftCoreError>> {
         self.core_handle.propose(proposal)
     }
 }
