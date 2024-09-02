@@ -4,25 +4,33 @@ use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, Request
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Receiver;
+use crate::raft::types::NodeId;
 
 #[derive(Debug)]
 pub struct RaftCoreHandle<R: Send + 'static> {
+    node_id: NodeId,
     tx: UnboundedSender<CoreQueueEntry<R>>,
 }
 
 impl <R: Send + 'static> Clone for RaftCoreHandle<R> {
     fn clone(&self) -> Self {
         Self {
+            node_id: self.node_id.clone(),
             tx: self.tx.clone(),
         }
     }
 }
 
 impl<R: Send + 'static> RaftCoreHandle<R> {
-    pub fn new(tx: UnboundedSender<CoreQueueEntry<R>>) -> Self {
+    pub fn new(node_id: NodeId, tx: UnboundedSender<CoreQueueEntry<R>>) -> Self {
         Self {
+            node_id,
             tx,
         }
+    }
+
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.clone()
     }
 
     pub fn append_entries_request(&self, request: AppendEntriesRequest) -> Receiver<AppendEntriesResponse> {

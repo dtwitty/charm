@@ -7,6 +7,7 @@ use tokio::spawn;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tonic::transport::Channel;
 use tonic::Request;
+use tracing::warn;
 
 pub enum RaftRequest {
     AppendEntries(AppendEntriesRequest),
@@ -31,8 +32,9 @@ impl OutboundNetworkHandle {
     }
 }
 
-pub fn run_outbound_network<R: Send + 'static>(handle: RaftCoreHandle<R>, mut rx: UnboundedReceiver<(NodeId, RaftRequest)>) {
-    spawn(async move {
+#[tracing::instrument(fields(node_id = handle.node_id().0.clone()), skip_all)]
+async fn run<R: Send + 'static>(handle: RaftCoreHandle<R>, mut rx: UnboundedReceiver<(NodeId, RaftRequest)>) {
+    {
 
         // Holds the clients for each node.
         let mut clients: HashMap<NodeId, RaftClient<Channel>> = HashMap::new();
@@ -42,7 +44,12 @@ pub fn run_outbound_network<R: Send + 'static>(handle: RaftCoreHandle<R>, mut rx
             if !clients.contains_key(&node_id) {
                 // If we don't have a client for this node yet, create one.
                 let client = create_client(node_id.clone()).await;
-                clients.insert(node_id.clone(), client);
+                if let Ok(client) = client {
+                    clients.insert(node_id.clone(), client);
+                } else {
+                    warn!("Failed to create client for node {:?}. Dropping a message.", node_id);
+                    continue;
+                }
             }
 
             let mut client = clients.get_mut(&node_id).unwrap().clone();
@@ -71,10 +78,14 @@ pub fn run_outbound_network<R: Send + 'static>(handle: RaftCoreHandle<R>, mut rx
                 }
             });
         }
-    });
+    }
 }
 
-async fn create_client(node_id: NodeId) -> RaftClient<Channel> {
+pub fn run_outbound_network<R: Send + 'static>(handle: RaftCoreHandle<R>, mut rx: UnboundedReceiver<(NodeId, RaftRequest)>) {
+    spawn(run(handle, rx));
+}
+
+async fn create_client(node_id: NodeId) -> Result<RaftClient<Channel>, tonic::transport::Error> {
     let addr = node_id.0;
-    RaftClient::connect(addr).await.unwrap()
+    RaftClient::connect(addr).await
 }

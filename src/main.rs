@@ -100,6 +100,7 @@ TODO:
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt::init();
     let args = Args::parse();
     let config = RaftConfig {
         node_id: raft::types::NodeId(args.bind_address.clone()),
