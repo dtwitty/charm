@@ -3,9 +3,6 @@ name = "charm"
 version = "0.1.0"
 edition = "2021"
 
-[build]
-rustflags = "--cfg madsim"
-
 [[bin]]
 name = "main"
 path = "src/bin/main.rs"
@@ -18,7 +15,7 @@ path = "src/lib.rs"
 madsim = "0.2.30"
 tracing = "0.1.40"
 tokio = { version = "0.2.29", package = "madsim-tokio", features = ["full", "io-util"] }
-derive_builder = "0.20.0"
+derive_builder = "0.20.1"
 futures = "0.3.30"
 tracing-subscriber = "0.3.18"
 clap = { version = "4.5.16", features = ["derive"] }

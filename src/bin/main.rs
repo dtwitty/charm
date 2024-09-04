@@ -33,7 +33,7 @@ struct Args {
     #[clap(value_parser = humantime::parse_duration, default_value = "50ms")]
     heartbeat_interval: Duration,
 
-    /// The addresses of the other nodes in the cluster.
+    /// The addresses of the other nodes in the cluster (can include this one for convenience).
     #[arg(long)]
     peer_addresses: Vec<String>,
 }
@@ -101,13 +101,14 @@ TODO:
 async fn main() {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
-    let config = RaftConfig {
+    let mut config = RaftConfig {
         node_id: raft::types::NodeId(args.bind_address.clone()),
         other_nodes: args.peer_addresses.into_iter().map(raft::types::NodeId).collect(),
         election_timeout_min: args.min_election_timeout,
         election_timeout_max: args.max_election_timeout,
         heartbeat_interval: args.heartbeat_interval,
     };
+    config.other_nodes.retain(|node| node != &config.node_id);
 
     let sm = StateMachine {
         map: HashMap::new(),

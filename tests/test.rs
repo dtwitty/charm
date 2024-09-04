@@ -7,6 +7,9 @@ use charm::raft::types::NodeId;
 use madsim::runtime::Handle;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::pending;
+use std::net::IpAddr::V4;
+use std::net::Ipv4Addr;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tonic::async_trait;
@@ -66,25 +69,34 @@ impl raft::state_machine::StateMachine for StateMachine {
 async fn test_state_machine() {
     let handle = Handle::current();
 
-    let ports = vec![54321, 54322, 54323];
-    let nodes = ports.iter().map(|p| {
-        handle.create_node()
-    });
+    let ips = vec![
+        V4(Ipv4Addr::new(10, 0, 0, 1)),
+        V4(Ipv4Addr::new(10, 0, 0, 2)),
+        V4(Ipv4Addr::new(10, 0, 0, 3)),
+    ];
+    let nodes = ips.iter().map(|ip| {
+        handle.create_node().name(format!("node-{}", ip)).ip(ip.clone()).build()
+    }).collect::<Vec<_>>();
 
-    let node0 = handle.create_node().name("server").ip(addr0.ip()).build();
-    let node1 = handle.create_node().name("client").ip(addr1.ip()).build();
-    let node2 = handle.create_node().name("client").ip(addr2.ip()).build();
+    let node_ids = nodes.iter().zip(ips.iter()).map(|(node, ip)| NodeId(format!("{}:54321", ip))).collect::<Vec<_>>();
 
-    let config = RaftConfig {
-        node_id: NodeId("127.0.0.1:54321".to_string()),
-        other_nodes: vec![NodeId("127.0.0.1:54322".to_string()), NodeId("127.0.0.1:54323".to_string())],
-        election_timeout_min: Duration::from_millis(150),
-        election_timeout_max: Duration::from_millis(300),
-        heartbeat_interval: Duration::from_millis(50),
-    };
+    for (node_id, node) in node_ids.iter().zip(nodes.iter()) {
+        let node_id_clones = node_ids.clone();
+        let node_id_clone = node_id.clone();
+        node.spawn(async move {
+            let config = RaftConfig {
+                node_id: node_id_clone,
+                other_nodes: node_id_clones,
+                election_timeout_min: Duration::from_millis(150),
+                election_timeout_max: Duration::from_millis(300),
+                heartbeat_interval: Duration::from_millis(50),
+            };
 
-    let sm = StateMachine {
-        map: HashMap::new(),
-    };
-    let raft_handle = run_raft(config, sm);
+            let sm = StateMachine {
+                map: HashMap::new(),
+            };
+            let raft_handle = run_raft(config, sm);
+            pending::<()>().await
+        });
+    }
 }
