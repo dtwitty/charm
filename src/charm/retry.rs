@@ -97,7 +97,7 @@ impl IntoIterator for RetryStrategy {
 
     fn into_iter(self) -> Self::IntoIter {
         self.validate();
-        let current = self.initial_delay.clone();
+        let current = self.initial_delay;
         RetryStrategyIterator {
             strategy: self,
             current,

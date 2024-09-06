@@ -550,7 +550,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
 
     fn broadcast_heartbeat(&mut self) {
         for node_id in &self.config.other_nodes {
-            self.send_append_entries(&node_id);
+            self.send_append_entries(node_id);
         }
     }
 
