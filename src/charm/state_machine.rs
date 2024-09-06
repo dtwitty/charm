@@ -1,6 +1,6 @@
 use crate::raft;
-use madsim::net::rpc::{Deserialize, Serialize};
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tonic::async_trait;
 

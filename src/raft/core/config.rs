@@ -1,8 +1,7 @@
 use std::time::Duration;
 
 use derive_builder::Builder;
-use madsim::rand;
-use madsim::rand::Rng;
+use rand::{thread_rng, Rng};
 use crate::raft::types::NodeId;
 
 #[derive(Debug, Clone, PartialEq, Builder)]
@@ -22,7 +21,7 @@ pub struct RaftConfig {
 
 impl RaftConfig {
     pub fn get_election_timeout(&self) -> Duration {
-        let mut rng = rand::thread_rng();
+        let mut rng = thread_rng();
         let election_timeout_min = self.election_timeout_min;
         let election_timeout_max = self.election_timeout_max;
         rng.gen_range(election_timeout_min..election_timeout_max)
