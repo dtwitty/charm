@@ -2,6 +2,7 @@ use crate::charm::client::EasyCharmClient;
 use crate::charm::pb::charm_server::{Charm, CharmServer};
 use crate::charm::pb::{DeleteRequest, DeleteResponse, GetRequest, GetResponse, PutRequest, PutResponse};
 use crate::charm::retry::RetryStrategyBuilder;
+use crate::charm::state_machine::CharmStateMachineRequest;
 use crate::raft::core::error::RaftCoreError::NotLeader;
 use crate::raft::types::NodeId;
 use crate::raft::RaftHandle;
@@ -11,7 +12,6 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tonic::{async_trait, Request, Response, Status};
-use crate::charm::state_machine::CharmStateMachineRequest;
 
 struct CharmServerImpl {
     raft_handle: RaftHandle<CharmStateMachineRequest>,
@@ -28,7 +28,7 @@ impl CharmServerImpl {
             let retry_strategy = RetryStrategyBuilder::default().total_retry_time(Duration::from_secs(1)).build().unwrap();
             EasyCharmClient::with_retry_strategy(leader.0.clone(), retry_strategy)
         });
-        let client_or_status = client_ref_res.map_err(|e| Status::internal(format!("leader address {} is not valid", leader.0)));
+        let client_or_status = client_ref_res.map_err(|_| Status::internal(format!("leader address {} is not valid", leader.0)));
         let client = client_or_status?;
         // Clone and drop the ref to avoid holding the lock.
         Ok(client.clone())
@@ -54,7 +54,7 @@ impl Charm for CharmServerImpl {
 
             Err(NotLeader { leader_id: Some(leader) }) => {
                 // We are not the leader, but we know who is.
-                let client = self.get_client(leader).map_err(|e| Status::internal("failed to get client to forward request to leader".to_string()))?;
+                let client = self.get_client(leader.clone()).map_err(|_| Status::internal(format!("failed to get client to forward request to leader `{}`", leader.0)))?;
                 // Forward the request to the leader.
                 let response = client.get(key).await.map_err(|e| Status::internal(e.to_string()))?;
                 Ok(Response::new(GetResponse { value: response }))
@@ -85,7 +85,7 @@ impl Charm for CharmServerImpl {
 
             Err(NotLeader { leader_id: Some(leader) }) => {
                 // We are not the leader, but we know who is.
-                let client = self.get_client(leader).map_err(|e| Status::internal("failed to get client to forward request to leader".to_string()))?;
+                let client = self.get_client(leader.clone()).map_err(|_| Status::internal(format!("failed to get client to forward request to leader `{}`", leader.0)))?;
                 // Forward the request to the leader.
                 client.put(key, value).await.map_err(|e| Status::internal(e.to_string()))?;
                 Ok(Response::new(PutResponse {}))
@@ -115,7 +115,7 @@ impl Charm for CharmServerImpl {
 
             Err(NotLeader { leader_id: Some(leader) }) => {
                 // We are not the leader, but we know who is.
-                let client = self.get_client(leader).map_err(|e| Status::internal("failed to get client to forward request to leader".to_string()))?;
+                let client = self.get_client(leader.clone()).map_err(|_| Status::internal(format!("failed to get client to forward request to leader `{}`", leader.0)))?;
                 // Forward the request to the leader.
                 client.delete(key).await.map_err(|e| Status::internal(e.to_string()))?;
                 Ok(Response::new(DeleteResponse {}))
