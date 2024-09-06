@@ -1,5 +1,8 @@
 #![cfg(madsim)]
 
+use charm::charm::client::EasyCharmClient;
+use charm::charm::server::run_server;
+use charm::charm::state_machine::CharmStateMachine;
 use charm::raft;
 use charm::raft::core::config::RaftConfig;
 use charm::raft::run_raft;
@@ -9,64 +12,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::pending;
 use std::net::IpAddr::V4;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
+use tokio::net::unix::SocketAddr;
 use tokio::sync::oneshot;
 use tonic::async_trait;
 
-struct StateMachine {
-    map: HashMap<String, String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-enum StateMachineRequest {
-    Get {
-        key: String,
-        #[serde(skip)]
-        response: Option<oneshot::Sender<Option<String>>>,
-    },
-    Set {
-        key: String,
-        value: String,
-        #[serde(skip)]
-        response: Option<oneshot::Sender<Option<String>>>,
-    },
-    Delete {
-        key: String,
-        #[serde(skip)]
-        response: Option<oneshot::Sender<Option<String>>>,
-    },
-}
-
-#[async_trait]
-impl raft::state_machine::StateMachine for StateMachine {
-    type Request = StateMachineRequest;
-
-    async fn apply(&mut self, request: Self::Request) {
-        match request {
-            StateMachineRequest::Get { key, response: tx } => {
-                let value = self.map.get(&key).cloned();
-                if let Some(tx) = tx {
-                    tx.send(value).unwrap();
-                }
-            }
-            StateMachineRequest::Set { key, value, response: tx } => {
-                let old_value = self.map.insert(key, value);
-                if let Some(tx) = tx {
-                    tx.send(old_value).unwrap();
-                }
-            }
-            StateMachineRequest::Delete { key, response: tx } => {
-                let value = self.map.remove(&key);
-                if let Some(tx) = tx {
-                    tx.send(value).unwrap();
-                }
-            }
-        }
-    }
-}
 #[madsim::test]
-async fn test_state_machine() {
+async fn test_charm() {
     let handle = Handle::current();
 
     let ips = vec![
@@ -78,11 +31,13 @@ async fn test_state_machine() {
         handle.create_node().name(format!("node-{}", ip)).ip(ip.clone()).build()
     }).collect::<Vec<_>>();
 
-    let node_ids = nodes.iter().zip(ips.iter()).map(|(node, ip)| NodeId(format!("{}:54321", ip))).collect::<Vec<_>>();
+    let charm_addrs = ips.iter().map(|ip| SocketAddr::V4(SocketAddrV4::new(ip.clone(), 54321))).collect::<Vec<_>>();
+    let raft_node_ids = nodes.iter().zip(ips.iter()).map(|(node, ip)| NodeId(format!("{}:54321", ip))).collect::<Vec<_>>();
 
-    for (node_id, node) in node_ids.iter().zip(nodes.iter()) {
-        let node_id_clones = node_ids.clone();
-        let node_id_clone = node_id.clone();
+    // Run the servers.
+    for ((raft_node_id, socket_addr), node) in raft_node_ids.iter().zip(charm_addrs.iter()).zip(nodes.iter()) {
+        let node_id_clones = raft_node_ids.clone();
+        let node_id_clone = raft_node_id.clone();
         node.spawn(async move {
             let config = RaftConfig {
                 node_id: node_id_clone,
@@ -92,11 +47,24 @@ async fn test_state_machine() {
                 heartbeat_interval: Duration::from_millis(50),
             };
 
-            let sm = StateMachine {
+            let sm = CharmStateMachine {
                 map: HashMap::new(),
             };
             let raft_handle = run_raft(config, sm);
+            let server = run_server(socket_addr.clone(), raft_handle);
             pending::<()>().await
         });
     }
+
+    let client = handle.create_node().name("client").build();
+    client.spawn(async move {
+        sleep(Duration::from_secs(3)).await;
+        let client = EasyCharmClient::new(raft_node_ids[0].clone()).await.unwrap();
+        client.put("hello".to_string(), "world".to_string()).await.unwrap();
+        let value = client.get("hello".to_string()).await.unwrap();
+        assert_eq!(value, Some("world".to_string()));
+        client.delete("hello".to_string()).await.unwrap();
+        let value = client.get("hello".to_string()).await.unwrap();
+        assert_eq!(value, None);
+    });
 }
