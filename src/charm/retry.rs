@@ -1,5 +1,7 @@
 use derive_builder::Builder;
 use std::time::Duration;
+use rand::Rng;
+use crate::rng::get_rng;
 
 #[derive(Debug, Clone, Builder)]
 pub struct RetryStrategy {
@@ -58,7 +60,7 @@ impl RetryStrategy {
 
     fn apply_jitter(&self, delay: Duration) -> Duration {
         let range = self.jitter_max - self.jitter_min;
-        let jitter = rand::random::<f64>() * range + self.jitter_min;
+        let jitter = get_rng().gen::<f64>() * range + self.jitter_min;
         delay.mul_f64(jitter)
     }
 }

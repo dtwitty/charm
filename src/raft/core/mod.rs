@@ -5,16 +5,17 @@ use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, Request
 use crate::raft::network::outbound_network::OutboundNetworkHandle;
 use crate::raft::state_machine::StateMachineHandle;
 use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
+use crate::rng::get_rng;
 use config::RaftConfig;
+use futures::future::Shared;
+use futures::FutureExt;
 use log::Log;
+use rand::Rng;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::mem::swap;
 use std::time::Duration;
-use futures::future::Shared;
-use futures::FutureExt;
-use rand::Rng;
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot;
@@ -85,24 +86,24 @@ enum Role {
     Leader(LeaderState),
 }
 
-/*
-PLAN:
-Implement the `RaftNode` struct. It will interact directly with the sleeping system and use a
-passed-in Network to send messages to other nodes. It will also have a `handle_message` method
-that will be called when a message is received. There will finally be a `tick` method that waits for
-either a timeout or a message, and then calls `handle_message` or `handle_timeout` as appropriate.
+impl Role {
+    pub fn is_leader(&self) -> bool {
+        matches!(self, Leader(_))
+    }
 
-The driver method is simply a loop that calls `tick` and provides a Network object. Later it will provide
-a handle to the state machine.
+    pub fn is_follower(&self) -> bool {
+        matches!(self, Follower(_))
+    }
 
-Next, implement a method to tell leaders to append logs.
+    pub fn is_candidate(&self) -> bool {
+        matches!(self, Candidate(_))
+    }
+}
 
-This will be a good time to start testing. Exhaustively test any safety properties you find in the paper.
-
-Implement applying logs to a state machine.
-
-
- */
+struct Proposal<R> {
+    req: R,
+    commit_tx: oneshot::Sender<Result<(), RaftCoreError>>,
+}
 
 pub struct RaftNode<R: Serialize + DeserializeOwned + Send + 'static> {
     config: RaftConfig,
@@ -127,7 +128,7 @@ pub struct RaftNode<R: Serialize + DeserializeOwned + Send + 'static> {
     core_rx: UnboundedReceiver<CoreQueueEntry<R>>,
     outbound_network: OutboundNetworkHandle,
     state_machine: StateMachineHandle<R>,
-    propose_futures: BTreeMap<Index, oneshot::Sender<Result<(), RaftCoreError>>>
+    proposals: BTreeMap<Index, Proposal<R>>,
 }
 
 impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
@@ -137,7 +138,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
             election_timer: sleep(config.get_election_timeout()).shared(),
             leader_id: None,
         };
-        let propose_futures = BTreeMap::new();
+        let proposals = BTreeMap::new();
 
         let mut node = RaftNode {
             config,
@@ -149,7 +150,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
             core_rx,
             outbound_network,
             state_machine,
-            propose_futures,
+            proposals,
         };
 
         node.reset_election_timer();
@@ -241,11 +242,9 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
         self.voted_for = Some(self.node_id().clone());
 
         // Become a candidate, and reset the election timer.
-        let mut rng = rand::thread_rng();
-        let election_timeout = rng.gen_range(self.config.election_timeout_min..self.config.election_timeout_max);
+        let election_timeout = self.config.get_election_timeout();
         let candidate_state = CandidateState { votes_received: 1, election_timer: sleep(election_timeout).shared() };
-        let role = Candidate(candidate_state);
-        self.role = role;
+        self.role = Candidate(candidate_state);
 
         // Send RequestVoteRequests to all nodes.
         let req = RequestVoteRequest {
@@ -339,9 +338,9 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
                     warn!("Log conflict detected. Truncating log.");
                     self.log.truncate(prev_log_index);
                     // Fail the futures that got truncated.
-                    let to_fail = self.propose_futures.split_off(&prev_log_index);
-                    for (_, tx) in to_fail {
-                        tx.send(Err(RaftCoreError::NotLeader {
+                    let to_fail = self.proposals.split_off(&prev_log_index);
+                    for (_, proposal) in to_fail {
+                        proposal.commit_tx.send(Err(RaftCoreError::NotLeader {
                             leader_id: Some(leader_id.clone()),
                         })).unwrap();
                     }
@@ -385,15 +384,13 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
                     debug!("Cluster majority advanced to index {:?}. Updating commit index.", majority_match);
 
                     // Split off futures that can be completed.
-                    let mut to_complete = self.propose_futures.split_off(&(majority_match.next()));
-                    swap(&mut self.propose_futures, &mut to_complete);
+                    let mut to_complete = self.proposals.split_off(&(majority_match.next()));
+                    swap(&mut self.proposals, &mut to_complete);
 
                     // Complete the futures, and send them to the state machine.
-                    for (i, tx) in to_complete {
-                        tx.send(Ok(())).unwrap();
-                        let serialized = &self.log.get(i).unwrap().data.0;
-                        let req = serde_json::from_slice(serialized).unwrap();
-                        self.state_machine.apply(req);
+                    for (_, proposal) in to_complete {
+                        proposal.commit_tx.send(Ok(())).unwrap();
+                        self.state_machine.apply(proposal.req);
                     }
 
                     // Mark that we have committed!
@@ -488,7 +485,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
 
 
                     let majority = self.config.other_nodes.len() / 2 + 1;
-                    if state.votes_received > majority as u64 {
+                    if state.votes_received > majority as u64 && !self.role.is_leader() {
                         // Great success!
                         self.become_leader();
                     }
@@ -521,7 +518,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
                 let serialized = serde_json::to_vec(&request).unwrap();
                 let log_entry = LogEntry { term: self.current_term, data: Data(serialized) };
                 let index = self.log.append(log_entry);
-                self.propose_futures.insert(index, commit_tx);
+                self.proposals.insert(index, Proposal { req: request, commit_tx });
             }
         }
     }
@@ -600,10 +597,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
     }
 
     fn get_election_timeout(&self) -> Duration {
-        let mut rng = rand::thread_rng();
-        let election_timeout_min = self.config.election_timeout_min;
-        let election_timeout_max = self.config.election_timeout_max;
-        rng.gen_range(election_timeout_min..election_timeout_max)
+        self.config.get_election_timeout()
     }
 
     fn reset_election_timer(&mut self) {
