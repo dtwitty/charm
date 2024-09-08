@@ -53,7 +53,9 @@ where
     let state_machine_handle = StateMachineHandle::new(to_state_machine_tx);
     run_state_machine_driver(state_machine, to_state_machine_rx);
     run_outbound_network(raft_handle.core_handle.clone(), to_outbound_rx);
-    run_inbound_network(config.node_id.clone(), raft_handle.core_handle.clone());
+
+    let port = config.node_id.0.split(":").last().unwrap().parse().unwrap();
+    run_inbound_network(port, raft_handle.core_handle.clone());
     run_core(config, to_core_rx, outbound_network_handle, state_machine_handle);
     raft_handle
 }

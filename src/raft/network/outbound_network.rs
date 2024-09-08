@@ -5,7 +5,7 @@ use crate::raft::types::NodeId;
 use std::collections::HashMap;
 use tokio::spawn;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tonic::transport::Channel;
+use tonic::transport::{Channel, Endpoint};
 use tonic::Request;
 use tracing::warn;
 
@@ -87,5 +87,13 @@ pub fn run_outbound_network<R: Send + 'static>(handle: RaftCoreHandle<R>, rx: Un
 
 async fn create_client(node_id: NodeId) -> Result<RaftClient<Channel>, tonic::transport::Error> {
     let addr = node_id.0;
-    RaftClient::connect(addr).await
+    let endpoint = Endpoint::from_shared(addr)?;
+
+    #[cfg(not(feature = "turmoil"))]
+    let channel = endpoint.connect_lazy();
+
+    #[cfg(feature = "turmoil")]
+    let channel = endpoint.connect_with_connector_lazy(crate::net::connector::TurmoilTcpConnector);
+
+    Ok(RaftClient::new(channel))
 }

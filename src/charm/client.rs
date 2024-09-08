@@ -92,6 +92,11 @@ impl EasyCharmClient {
 
 fn make_charm_client(addr: String) -> anyhow::Result<CharmClient<Channel>> {
     let endpoint = Channel::from_shared(addr)?;
+    #[cfg(not(feature = "turmoil"))]
     let channel = endpoint.connect_lazy();
+
+    #[cfg(feature = "turmoil")]
+    let channel = endpoint.connect_with_connector_lazy(crate::net::connector::TurmoilTcpConnector);
+
     Ok(CharmClient::new(channel))
 }

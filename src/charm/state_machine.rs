@@ -8,6 +8,14 @@ pub struct CharmStateMachine {
     map: HashMap<String, String>,
 }
 
+impl CharmStateMachine {
+    pub fn new() -> CharmStateMachine {
+        CharmStateMachine {
+            map: HashMap::new(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum CharmStateMachineRequest {
     Get {

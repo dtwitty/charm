@@ -1,6 +1,5 @@
 use derive_builder::Builder;
 use std::time::Duration;
-use madsim::rand;
 
 #[derive(Debug, Clone, Builder)]
 pub struct RetryStrategy {
@@ -38,6 +37,7 @@ impl Default for RetryStrategy {
 }
 
 impl RetryStrategyBuilder {
+    #[allow(dead_code)]
     pub fn no_jitter(&mut self) -> &mut Self {
         self.jitter_min(1.0).jitter_max(1.0)
     }

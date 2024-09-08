@@ -7,7 +7,7 @@ use crate::raft::core::error::RaftCoreError::NotLeader;
 use crate::raft::types::NodeId;
 use crate::raft::RaftHandle;
 use dashmap::DashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 use tokio::spawn;
 use tokio::sync::oneshot;
@@ -129,14 +129,27 @@ impl Charm for CharmServerImpl {
     }
 }
 
-pub fn run_server(addr: SocketAddr, raft_handle: RaftHandle<CharmStateMachineRequest>) {
+pub fn run_server(port: u16, raft_handle: RaftHandle<CharmStateMachineRequest>) {
+    let addr = (IpAddr::from(Ipv4Addr::UNSPECIFIED), port).into();
     let clients = DashMap::new();
     let charm_server = CharmServerImpl { raft_handle, clients };
+
+    #[cfg(not(feature = "turmoil"))]
     spawn(async move {
         tonic::transport::Server::builder()
             .add_service(CharmServer::new(charm_server))
             .serve(addr)
             .await
+            .unwrap();
+    });
+
+    #[cfg(feature = "turmoil")]
+    spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(CharmServer::new(charm_server))
+            .serve_with_incoming(
+                crate::net::make_incoming(addr)
+            ).await
             .unwrap();
     });
 }
