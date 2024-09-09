@@ -22,14 +22,20 @@ impl<R> StateMachineHandle<R> {
     }
 }
 
-pub fn run_state_machine_driver<S>(mut state_machine: S, mut rx: UnboundedReceiver<S::Request>)
+#[tracing::instrument(skip_all)]
+async fn run<S>(mut state_machine: S, mut rx: UnboundedReceiver<S::Request>)
 where
     S: StateMachine,
 {
-    spawn(async move {
-       while let Some(request) = rx.recv().await {
-            state_machine.apply(request).await;
-        }
-    });
+    while let Some(request) = rx.recv().await {
+        state_machine.apply(request).await;
+    }
+}
+
+pub fn run_state_machine_driver<S>(state_machine: S, rx: UnboundedReceiver<S::Request>)
+where
+    S: StateMachine,
+{
+    spawn(run(state_machine, rx));
 }
 

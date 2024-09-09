@@ -35,6 +35,7 @@ impl EasyCharmClient {
     }
 
 
+    #[tracing::instrument(level="debug", skip(self))]
     pub async fn get(&self, key: String) -> anyhow::Result<Option<String>> {
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
@@ -46,6 +47,7 @@ impl EasyCharmClient {
         }).await
     }
 
+    #[tracing::instrument(level="debug", skip(self))]
     pub async fn put(&self, key: String, value: String) -> anyhow::Result<()> {
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
@@ -57,6 +59,7 @@ impl EasyCharmClient {
         }).await
     }
 
+    #[tracing::instrument(level="debug", skip(self))]
     pub async fn delete(&self, key: String) -> anyhow::Result<()> {
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {

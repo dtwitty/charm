@@ -56,6 +56,7 @@ impl CharmServerImpl {
 
 #[async_trait]
 impl Charm for CharmServerImpl {
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn get(&self, request: Request<GetRequest>) -> Result<Response<GetResponse>, Status> {
         let request = request.into_inner();
         let key = request.key;
@@ -86,6 +87,7 @@ impl Charm for CharmServerImpl {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn put(&self, request: Request<PutRequest>) -> Result<Response<PutResponse>, Status> {
         let request = request.into_inner();
         let key = request.key;
@@ -117,6 +119,7 @@ impl Charm for CharmServerImpl {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn delete(&self, request: Request<DeleteRequest>) -> Result<Response<DeleteResponse>, Status> {
         let request = request.into_inner();
         let key = request.key;
@@ -158,7 +161,7 @@ pub fn run_server(config: CharmConfig, raft_handle: RaftHandle<CharmStateMachine
     spawn(async move {
         tonic::transport::Server::builder()
             .add_service(CharmServer::new(charm_server))
-            .serve(addr)
+            .serve(addr.into())
             .await
             .unwrap();
     });

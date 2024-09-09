@@ -15,10 +15,10 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::mem::swap;
 use std::time::Duration;
-use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot;
 use tokio::time::{sleep, Sleep};
+use tokio::{select, spawn};
 use tracing::{debug, error, info, trace, warn};
 
 pub mod handle;
@@ -276,18 +276,18 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
 
         if req.term < self.current_term {
             // This request is out of date.
-            debug!("Request has older term. Failing request.");
+            warn!("Request from {:?} has term {:?}, which is older than our term {:?}. Failing request.", req.leader_id, req.term, self.current_term);
             return self.append_entries_response(false);
         }
 
         if let Leader(_) = self.role {
-            error!("Another load claims to be leader with the same term! This should never happen.");
+            error!("Another node {:?} claims to be leader with the same term! This should never happen! Converting to follower.", req.leader_id);
             self.convert_to_follower();
         }
 
         if let Candidate(_) = self.role {
             // Someone else in the same term became a leader before us.
-            info!("Another node became leader. Converting to follower.");
+            info!("Another node {:?} while we were a candidate became leader. Converting to follower.", req.leader_id);
             self.convert_to_follower();
         }
 
@@ -307,14 +307,14 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
         let prev_log_entry = self.log.get(req.prev_log_index);
         if prev_log_entry.is_none() {
             // We don't have the previous log entry.
-            debug!("Previous log entry not found. Failing request.");
+            warn!("Previous log entry not found. Failing request.");
             return self.append_entries_response(false);
         }
 
         let prev_log_term = prev_log_entry.unwrap().term;
         if prev_log_term != req.prev_log_term {
             // The previous log term doesn't match.
-            debug!("Previous log term doesn't match. Failing request.");
+            warn!("Previous log term doesn't match. Failing request.");
             return self.append_entries_response(false);
         }
 
@@ -337,7 +337,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
             if let Some(prev_entry) = self.log.get(prev_log_index) {
                 if prev_entry.term != entry.term {
                     // There is a conflict. Truncate the log and append the new entry.
-                    warn!("Log conflict detected. Truncating log.");
+                    warn!("Log conflict detected at index {:?}. Truncating log.", prev_log_index);
                     self.log.truncate(prev_log_index);
                     // Fail the futures that got truncated.
                     let to_fail = self.proposals.split_off(&prev_log_index);
@@ -413,12 +413,13 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
 
     fn handle_request_vote_request(&mut self, req: RequestVoteRequest) -> RequestVoteResponse {
         debug!("Received RequestVoteRequest: {:?}", req);
+        info!("Received vote request from {:?}.", req.candidate_id);
 
         self.check_incoming_term(req.term);
 
         if req.term < self.current_term {
             // This candidate is out of date.
-            debug!("Candidate has older term. Failing vote request.");
+            info!("Candidate has older term. Failing vote request.");
             return self.request_vote_response(false);
         }
 
@@ -428,7 +429,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
         };
         if !can_vote {
             // We already voted for someone else.
-            debug!("Already voted for another candidate. Failing vote request.");
+            info!("Already voted for another candidate. Failing vote request.");
             return self.request_vote_response(false);
         }
 
@@ -437,7 +438,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
         let candidate_last_log_term = req.last_log_term;
         if candidate_last_log_term > our_last_log_term {
             // The candidate has a higher term, so we approve!
-            debug!("Candidate has higher term. Voting for candidate {:?}.", req.candidate_id);
+            info!("Candidate has higher term. Voting for candidate {:?}.", req.candidate_id);
             self.vote_for(&req.candidate_id);
             return self.request_vote_response(true);
         }
@@ -447,13 +448,13 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
         let candidate_last_log_index = req.last_log_index;
         if candidate_last_log_index >= our_last_log_index {
             // The candidate has at least as much log as we do, so we approve!
-            debug!("Candidate has at least as much log as we do. Voting for candidate {:?}.", req.candidate_id);
+            info!("Candidate has at least as much log as we do. Voting for candidate {:?}.", req.candidate_id);
             self.vote_for(&req.candidate_id);
             return self.request_vote_response(true);
         }
 
         // If we get here, the candidate's log is shorter than ours.
-        debug!("Candidate has shorter log. Failing vote request.");
+        info!("Candidate has shorter log. Failing vote request.");
         self.request_vote_response(false)
     }
 
@@ -577,7 +578,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
     // Convert to follower if the term is higher than the current term.
     fn check_incoming_term(&mut self, term: Term) {
         if self.current_term < term {
-            debug!("Received message with higher term. Converting to follower.");
+            info!("Received message with higher term. Converting to follower.");
             self.current_term = term;
             self.convert_to_follower();
         }
@@ -591,8 +592,10 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
     }
 
     fn update_leader(&mut self, leader_id: NodeId) {
+        let election_timeout = self.get_election_timeout();
         if let Follower(ref mut follower_state) = self.role {
             follower_state.leader_id = Some(leader_id);
+            follower_state.election_timer = sleep(election_timeout).shared();
         } else {
             panic!("Expected follower role.");
         }
@@ -633,7 +636,7 @@ async fn run<R: Serialize + DeserializeOwned + Send + 'static>(config: RaftConfi
 }
 
 pub fn run_core<R: Serialize + DeserializeOwned + Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, rng: CharmRng) {
-    tokio::spawn(run(config, core_rx, outbound_network, state_machine, rng));
+    spawn(run(config, core_rx, outbound_network, state_machine, rng));
 }
 
 

@@ -2,10 +2,11 @@
 pub use tokio::net::*;
 
 #[cfg(feature = "turmoil")]
-pub use turmoil::net::*;
-use turmoil::ToSocketAddrs;
-#[cfg(feature = "turmoil")]
 use crate::net::connector::TurmoilTcpStream;
+#[cfg(feature = "turmoil")]
+pub use turmoil::net::*;
+#[cfg(feature = "turmoil")]
+use turmoil::ToSocketAddrs;
 
 #[cfg(feature = "turmoil")]
 pub fn make_incoming<A: ToSocketAddrs>(addr: A) -> impl futures::Stream<Item=Result<TurmoilTcpStream, std::io::Error>> {

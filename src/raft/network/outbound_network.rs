@@ -32,7 +32,7 @@ impl OutboundNetworkHandle {
     }
 }
 
-#[tracing::instrument(fields(node_id = handle.node_id().0.clone()), skip_all)]
+#[tracing::instrument(skip_all)]
 async fn run<R: Send + 'static>(handle: RaftCoreHandle<R>, mut rx: UnboundedReceiver<(NodeId, RaftRequest)>) {
     {
 
@@ -80,6 +80,7 @@ async fn run<R: Send + 'static>(handle: RaftCoreHandle<R>, mut rx: UnboundedRece
         }
     }
 }
+
 
 pub fn run_outbound_network<R: Send + 'static>(handle: RaftCoreHandle<R>, rx: UnboundedReceiver<(NodeId, RaftRequest)>) {
     spawn(run(handle, rx));

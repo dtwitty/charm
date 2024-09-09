@@ -10,34 +10,32 @@ use charm::rng::CharmRng;
 use rand::RngCore;
 use std::future::pending;
 use std::time::Duration;
-use tracing::error;
 use wyrand::WyRand;
 
 #[test]
 #[cfg(feature = "turmoil")]
 fn test_charm() -> turmoil::Result {
     // Run a bunch of tests with different seeds to try to find a seed that causes a failure.
-    let mut bad_seed = None;
     for seed in 1..100 {
-        let result = test_one(seed);
-        if result.is_err() {
-            bad_seed = Some(seed);
-            break;
+        let res = test_one(seed);
+        if let Err(e) = res {
+            eprintln!("seed {} failed: {:?}", seed, e);
+            return Err(e);
         }
     }
-
-    if let Some(seed) = bad_seed {
-        // Rerun the test with the bad seed to get a backtrace.
-        // Add logging to the test to help debug the issue.
-        configure_tracing();
-        error!("Test failed with seed {}", seed);
-        return test_one(seed);
-    }
-
     Ok(())
 }
 
+#[test]
+#[cfg(feature = "turmoil")]
+fn test_seed() -> turmoil::Result {
+    let seed = 2;
+    configure_tracing();
+    test_one(seed)
+}
 
+
+#[tracing::instrument()]
 fn test_one(seed: u64) -> turmoil::Result {
     // The simulation uses this seed.
     let mut sim = turmoil::Builder::new()
@@ -116,7 +114,6 @@ fn configure_tracing() {
     tracing::subscriber::set_global_default(
         tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .with_env_filter("charm=debug")
             .with_timer(SimElapsedTime)
             .finish(),
     )

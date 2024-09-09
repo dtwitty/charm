@@ -13,6 +13,7 @@ struct InboundNetwork<R: Send + 'static> {
 
 #[async_trait]
 impl<R: Send + 'static> Raft for InboundNetwork<R> {
+    #[tracing::instrument(level="debug", skip(self))]
     async fn append_entries(&self, request: Request<AppendEntriesRequestPb>) -> Result<Response<AppendEntriesResponsePb>, Status> {
         let request_pb = request.into_inner();
         let request = AppendEntriesRequest::from_pb(&request_pb);
@@ -22,6 +23,7 @@ impl<R: Send + 'static> Raft for InboundNetwork<R> {
         Ok(Response::new(response_pb))
     }
 
+    #[tracing::instrument(level="debug", skip(self))]
     async fn request_vote(&self, request: Request<RequestVoteRequestPb>) -> Result<Response<RequestVoteResponsePb>, Status> {
         let request_pb = request.into_inner();
         let request = RequestVoteRequest::from_pb(&request_pb);
@@ -40,7 +42,7 @@ pub fn run_inbound_network<R: Send + 'static>(port: u16, handle: RaftCoreHandle<
     spawn(async move {
         tonic::transport::Server::builder()
             .add_service(RaftServer::new(network))
-            .serve(addr)
+            .serve(addr.into())
             .await
             .unwrap();
     });
