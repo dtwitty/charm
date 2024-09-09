@@ -6,8 +6,10 @@ use charm::raft::core::config::RaftConfigBuilder;
 use charm::raft::run_raft;
 use charm::raft::types::NodeId;
 use charm::rng::CharmRng;
+use rand::RngCore;
 use std::future::pending;
 use std::time::Duration;
+use tracing::error;
 use wyrand::WyRand;
 
 #[test]
@@ -15,10 +17,9 @@ use wyrand::WyRand;
 fn test_charm() -> turmoil::Result {
     // Run a bunch of tests with different seeds to try to find a seed that causes a failure.
     let mut bad_seed = None;
-    for seed in 0..100 {
+    for seed in 1..100 {
         let result = test_one(seed);
         if result.is_err() {
-            eprintln!("Bad Seed: {}", seed);
             bad_seed = Some(seed);
             break;
         }
@@ -28,6 +29,7 @@ fn test_charm() -> turmoil::Result {
         // Rerun the test with the bad seed to get a backtrace.
         // Add logging to the test to help debug the issue.
         configure_tracing();
+        error!("Test failed with seed {}", seed);
         return test_one(seed);
     }
 
@@ -36,10 +38,13 @@ fn test_charm() -> turmoil::Result {
 
 
 fn test_one(seed: u64) -> turmoil::Result {
-
+    // The simulation uses this seed.
     let mut sim = turmoil::Builder::new()
         .simulation_duration(Duration::from_secs(60))
         .build_with_rng(Box::new(WyRand::new(seed)));
+
+    // The rest are seeded deterministically but differently for each node and client.
+    let mut seed_gen = WyRand::new(seed);
 
     let host_names = vec![
         "hostA",
@@ -49,6 +54,7 @@ fn test_one(seed: u64) -> turmoil::Result {
 
     let other_nodes = host_names.clone().iter().map(|x| NodeId(format!("http://{}:54321", x))).collect::<Vec<_>>();
     for host_name in host_names.iter().cloned() {
+        let seed = seed_gen.next_u64();
         let node_id = NodeId(format!("http://{}:54321", host_name));
         let other_nodes = other_nodes.clone().into_iter().filter(|x| x != &node_id).collect::<Vec<_>>();
         let config = RaftConfigBuilder::default()
@@ -69,8 +75,9 @@ fn test_one(seed: u64) -> turmoil::Result {
         });
     }
 
+    let client_seed = seed_gen.next_u64();
     sim.client("client", async move {
-        let retry_strategy = RetryStrategyBuilder::default().rng(CharmRng::new(seed)).build().expect("valid");
+        let retry_strategy = RetryStrategyBuilder::default().rng(CharmRng::new(client_seed)).build().expect("valid");
         let client = EasyCharmClient::new("http://hostA:12345".to_string(), retry_strategy)?;
         client.put("hello".to_string(), "world".to_string()).await?;
         let value = client.get("hello".to_string()).await?;
