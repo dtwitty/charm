@@ -14,6 +14,7 @@ use std::time::Duration;
 use tokio::spawn;
 use tokio::sync::oneshot;
 use tonic::{async_trait, Request, Response, Status};
+use tracing::{debug, Span};
 
 struct CharmServerImpl {
     config: CharmConfig,
@@ -56,13 +57,17 @@ impl CharmServerImpl {
 
 #[async_trait]
 impl Charm for CharmServerImpl {
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(
+        skip_all,
+        fields(host = self.config.listen_addr.clone())
+    )]
     async fn get(&self, request: Request<GetRequest>) -> Result<Response<GetResponse>, Status> {
         let request = request.into_inner();
+        debug!("Get `{:?}`", request.key);
         let key = request.key;
         let (tx, rx) = oneshot::channel();
         let commit = self.raft_handle
-            .propose(CharmStateMachineRequest::Get { key: key.clone(), response: Some(tx) })
+            .propose(CharmStateMachineRequest::Get { key: key.clone(), response: Some(tx), span: Some(Span::current()) })
             .await.unwrap();
 
         match commit {
@@ -87,14 +92,17 @@ impl Charm for CharmServerImpl {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(
+        skip_all,
+        fields(host = self.config.listen_addr.clone())
+    )]
     async fn put(&self, request: Request<PutRequest>) -> Result<Response<PutResponse>, Status> {
         let request = request.into_inner();
         let key = request.key;
         let value = request.value;
         let (tx, rx) = oneshot::channel();
         let commit = self.raft_handle
-            .propose(CharmStateMachineRequest::Set { key: key.clone(), value: value.clone(), response: Some(tx) })
+            .propose(CharmStateMachineRequest::Set { key: key.clone(), value: value.clone(), response: Some(tx), span: Some(Span::current()) })
             .await.unwrap();
 
         match commit {
@@ -119,13 +127,16 @@ impl Charm for CharmServerImpl {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(
+        skip_all,
+        fields(host = self.config.listen_addr.clone())
+    )]
     async fn delete(&self, request: Request<DeleteRequest>) -> Result<Response<DeleteResponse>, Status> {
         let request = request.into_inner();
         let key = request.key;
         let (tx, rx) = oneshot::channel();
         let commit = self.raft_handle
-            .propose(CharmStateMachineRequest::Delete { key: key.clone(), response: Some(tx) })
+            .propose(CharmStateMachineRequest::Delete { key: key.clone(), response: Some(tx), span: Some(Span::current()) })
             .await.unwrap();
 
         match commit {

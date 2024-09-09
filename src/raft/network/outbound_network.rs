@@ -7,7 +7,7 @@ use tokio::spawn;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tonic::transport::{Channel, Endpoint};
 use tonic::Request;
-use tracing::warn;
+use tracing::{warn};
 
 pub enum RaftRequest {
     AppendEntries(AppendEntriesRequest),

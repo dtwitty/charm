@@ -1,8 +1,10 @@
 use crate::raft;
-use std::collections::HashMap;
+use crate::tracing_util::SpanOption;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tokio::sync::oneshot;
 use tonic::async_trait;
+use tracing::Span;
 
 pub struct CharmStateMachine {
     map: HashMap<String, String>,
@@ -22,17 +24,23 @@ pub enum CharmStateMachineRequest {
         key: String,
         #[serde(skip)]
         response: Option<oneshot::Sender<Option<String>>>,
+        #[serde(skip)]
+        span: Option<Span>
     },
     Set {
         key: String,
         value: String,
         #[serde(skip)]
         response: Option<oneshot::Sender<()>>,
+        #[serde(skip)]
+        span: Option<Span>
     },
     Delete {
         key: String,
         #[serde(skip)]
         response: Option<oneshot::Sender<()>>,
+        #[serde(skip)]
+        span: Option<Span>
     },
 }
 
@@ -42,21 +50,30 @@ impl raft::state_machine::StateMachine for CharmStateMachine {
 
     async fn apply(&mut self, request: Self::Request) {
         match request {
-            CharmStateMachineRequest::Get { key, response: tx } => {
+            CharmStateMachineRequest::Get { key, response, span } => {
                 let value = self.map.get(&key).cloned();
-                if let Some(tx) = tx {
+                span.in_scope(|| {
+                    tracing::debug!("Get `{:?}` returns `{:?}`", key, value);
+                });
+                if let Some(tx) = response {
                     tx.send(value).unwrap();
                 }
             }
-            CharmStateMachineRequest::Set { key, value, response: tx } => {
+            CharmStateMachineRequest::Set { key, value, response, span } => {
+                span.in_scope(|| {
+                    tracing::debug!("Set `{:?}` to `{:?}`", key, value);
+                });
                 self.map.insert(key, value);
-                if let Some(tx) = tx {
+                if let Some(tx) = response {
                     tx.send(()).unwrap();
                 }
             }
-            CharmStateMachineRequest::Delete { key, response: tx } => {
+            CharmStateMachineRequest::Delete { key, response, span } => {
+                span.in_scope(|| {
+                    tracing::debug!("Delete `{:?}`", key);
+                });
                 self.map.remove(&key);
-                if let Some(tx) = tx {
+                if let Some(tx) = response {
                     tx.send(()).unwrap();
                 }
             }

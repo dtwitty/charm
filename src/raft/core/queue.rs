@@ -1,6 +1,7 @@
+use crate::raft::core::error::RaftCoreError;
 use crate::raft::messages::*;
 use tokio::sync::oneshot;
-use crate::raft::core::error::RaftCoreError;
+use tracing::Span;
 
 #[derive(Debug)]
 pub enum CoreQueueEntry<R: Send + 'static> {
@@ -20,5 +21,6 @@ pub enum CoreQueueEntry<R: Send + 'static> {
     Propose {
         proposal: R,
         commit_tx: oneshot::Sender<Result<(), RaftCoreError>>,
+        span: Span,
     },
 }

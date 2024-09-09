@@ -19,7 +19,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot;
 use tokio::time::{sleep, Sleep};
 use tokio::{select, spawn};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn, Instrument, Span};
 
 pub mod handle;
 mod queue;
@@ -229,8 +229,10 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
                 self.handle_request_vote_response(response);
             }
 
-            CoreQueueEntry::Propose { proposal, commit_tx } => {
-                self.handle_propose(proposal, commit_tx);
+            CoreQueueEntry::Propose { proposal, commit_tx, span } => {
+                span.in_scope(|| {
+                    self.handle_propose(proposal, commit_tx);
+                });
             }
         }
     }
@@ -508,19 +510,23 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
     fn handle_propose(&mut self, request: R, commit_tx: oneshot::Sender<Result<(), RaftCoreError>>) {
         match self.role {
             Candidate(_) => {
+                debug!("Not leader, but a follower. Failing proposal.");
                 let res = Err(RaftCoreError::NotLeader { leader_id: None });
                 commit_tx.send(res).unwrap();
             }
 
             Follower(ref follower_state) => {
+                debug!("Not leader, but a candidate. Failing proposal.");
                 let res = Err(RaftCoreError::NotLeader { leader_id: follower_state.leader_id.clone() });
                 commit_tx.send(res).unwrap();
             }
 
             Leader(_) => {
+                debug!("Leader received proposal. Appending to log.");
                 let serialized = serde_json::to_vec(&request).unwrap();
                 let log_entry = LogEntry { term: self.current_term, data: Data(serialized) };
                 let index = self.log.append(log_entry);
+                debug!("Proposal appended to log at index {:?}.", index);
                 self.proposals.insert(index, Proposal { req: request, commit_tx });
             }
         }
@@ -628,15 +634,18 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
 }
 
 #[tracing::instrument(skip_all)]
-async fn run<R: Serialize + DeserializeOwned + Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, rng: CharmRng) {
-    let mut node = RaftNode::new(config, core_rx, outbound_network, state_machine, rng);
-    loop {
-        node.tick().await;
-    }
+async fn run<R: Serialize + DeserializeOwned + Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, rng: CharmRng, span: Span) {
+    async move {
+        let mut node = RaftNode::new(config, core_rx, outbound_network, state_machine, rng);
+        loop {
+            node.tick().await;
+        }
+    }.instrument(span).await;
 }
 
 pub fn run_core<R: Serialize + DeserializeOwned + Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, rng: CharmRng) {
-    spawn(run(config, core_rx, outbound_network, state_machine, rng));
+    let span = Span::current();
+    spawn(run(config, core_rx, outbound_network, state_machine, rng, span));
 }
 
 

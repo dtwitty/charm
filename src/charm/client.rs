@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio_retry::Retry;
 use tonic::transport::Channel;
 use tonic::Response;
-use tracing::info;
+use tracing::{debug, instrument};
 
 #[derive(Clone)]
 pub struct EasyCharmClient {
@@ -38,9 +38,9 @@ impl EasyCharmClient {
     }
 
 
-    #[tracing::instrument(fields(addr=self.addr.clone()), skip(self))]
+    #[instrument(fields(addr=self.addr.clone()), skip_all)]
     pub async fn get(&self, key: String) -> anyhow::Result<Option<String>> {
-        info!("Getting key: {}", key);
+        debug!("Getting key: {}", key);
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;
@@ -51,9 +51,9 @@ impl EasyCharmClient {
         }).await
     }
 
-    #[tracing::instrument(fields(addr=self.addr.clone()), skip(self))]
+    #[instrument(fields(addr=self.addr.clone()), skip_all)]
     pub async fn put(&self, key: String, value: String) -> anyhow::Result<()> {
-        info!("Putting key: {} value: {}", key, value);
+        debug!("Putting key: {} value: {}", key, value);
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;
@@ -64,9 +64,9 @@ impl EasyCharmClient {
         }).await
     }
 
-    #[tracing::instrument(fields(addr=self.addr.clone()), skip(self))]
+    #[instrument(fields(addr=self.addr.clone()), skip_all)]
     pub async fn delete(&self, key: String) -> anyhow::Result<()> {
-        info!("Deleting key: {}", key);
+        debug!("Deleting key: {}", key);
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;

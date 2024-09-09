@@ -39,7 +39,7 @@ fn test_seed() -> turmoil::Result {
 fn test_one(seed: u64) -> turmoil::Result {
     // The simulation uses this seed.
     let mut sim = turmoil::Builder::new()
-        .simulation_duration(Duration::from_secs(10))
+        .simulation_duration(Duration::from_secs(3))
         .build_with_rng(Box::new(WyRand::new(seed)));
 
     // The rest are seeded deterministically but differently for each node and client.
@@ -62,7 +62,13 @@ fn test_one(seed: u64) -> turmoil::Result {
             .build().unwrap();
         let charm_config = CharmConfig {
             listen_addr: format!("http://{}:12345", host_name),
-            peer_addrs: host_names.clone().into_iter().map(|x| format!("http://{}:12345", x)).collect(),
+            peer_addrs: host_names
+                .clone()
+                .into_iter()
+                .filter(|h| h != &host_name)
+                .map(|x| format!("http://{}:12345", x))
+                .collect(),
+
         };
         sim.host(host_name.to_string(), move ||
             {
@@ -114,6 +120,7 @@ fn configure_tracing() {
     tracing::subscriber::set_global_default(
         tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_env_filter("info,charm::charm=debug")
             .with_timer(SimElapsedTime)
             .finish(),
     )
