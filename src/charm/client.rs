@@ -1,7 +1,6 @@
 use crate::charm::pb::charm_client::CharmClient;
 use crate::charm::pb::{DeleteRequest, GetRequest, PutRequest};
-use crate::charm::retry::RetryStrategy;
-use failsafe::backoff::{equal_jittered, EqualJittered};
+use crate::charm::retry::{RetryStrategy, RetryStrategyBuilder, RetryStrategyIterator};
 use failsafe::failure_policy::{success_rate_over_time_window, SuccessRateOverTimeWindow};
 use failsafe::{Config, StateMachine};
 use std::time::Duration;
@@ -13,20 +12,20 @@ use tonic::Response;
 pub struct EasyCharmClient {
     client: CharmClient<Channel>,
     retry_strategy: RetryStrategy,
-    circuit_breaker: StateMachine<SuccessRateOverTimeWindow<EqualJittered>, ()>,
+    circuit_breaker: StateMachine<SuccessRateOverTimeWindow<RetryStrategyIterator>, ()>,
 }
 
 impl EasyCharmClient {
-    pub fn new(addr: String) -> anyhow::Result<Self> {
-        let retry_strategy = RetryStrategy::new();
-        Self::with_retry_strategy(addr, retry_strategy)
-    }
-
-    pub fn with_retry_strategy(addr: String, retry_strategy: RetryStrategy) -> anyhow::Result<Self> {
+    pub fn new(addr: String, retry_strategy: RetryStrategy) -> anyhow::Result<Self> {
         let client = make_charm_client(addr)?;
         let window = Duration::from_secs(20);
-        let backoff = equal_jittered(Duration::from_secs(1), Duration::from_secs(5));
-        let failure_policy = success_rate_over_time_window(0.9, 20, window, backoff);
+
+        let backoff = RetryStrategyBuilder::default()
+            .rng(retry_strategy.clone_rng())
+            .initial_delay(Duration::from_secs(1))
+            .max_delay(Duration::from_secs(10))
+            .build()?;
+        let failure_policy = success_rate_over_time_window(0.9, 20, window, backoff.into_iter());
         let circuit_breaker = Config::new().failure_policy(failure_policy).build();
         Ok(EasyCharmClient {
             client,

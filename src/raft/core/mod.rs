@@ -5,12 +5,11 @@ use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, Request
 use crate::raft::network::outbound_network::OutboundNetworkHandle;
 use crate::raft::state_machine::StateMachineHandle;
 use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
-use crate::rng::get_rng;
+use crate::rng::CharmRng;
 use config::RaftConfig;
 use futures::future::Shared;
 use futures::FutureExt;
 use log::Log;
-use rand::Rng;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
@@ -86,6 +85,7 @@ enum Role {
     Leader(LeaderState),
 }
 
+#[allow(dead_code)]
 impl Role {
     pub fn is_leader(&self) -> bool {
         matches!(self, Leader(_))
@@ -129,13 +129,14 @@ pub struct RaftNode<R: Serialize + DeserializeOwned + Send + 'static> {
     outbound_network: OutboundNetworkHandle,
     state_machine: StateMachineHandle<R>,
     proposals: BTreeMap<Index, Proposal<R>>,
+    rng: CharmRng,
 }
 
 impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
     pub fn new(
-        config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>) -> RaftNode<R> {
+        config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, mut rng: CharmRng) -> RaftNode<R> {
         let follower_state = FollowerState {
-            election_timer: sleep(config.get_election_timeout()).shared(),
+            election_timer: sleep(config.get_election_timeout(&mut rng)).shared(),
             leader_id: None,
         };
         let proposals = BTreeMap::new();
@@ -151,6 +152,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
             outbound_network,
             state_machine,
             proposals,
+            rng,
         };
 
         node.reset_election_timer();
@@ -242,7 +244,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
         self.voted_for = Some(self.node_id().clone());
 
         // Become a candidate, and reset the election timer.
-        let election_timeout = self.config.get_election_timeout();
+        let election_timeout = self.get_election_timeout();
         let candidate_state = CandidateState { votes_received: 1, election_timer: sleep(election_timeout).shared() };
         self.role = Candidate(candidate_state);
 
@@ -596,8 +598,8 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
         }
     }
 
-    fn get_election_timeout(&self) -> Duration {
-        self.config.get_election_timeout()
+    fn get_election_timeout(&mut self) -> Duration {
+        self.config.get_election_timeout(&mut self.rng)
     }
 
     fn reset_election_timer(&mut self) {
@@ -623,15 +625,15 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
 }
 
 #[tracing::instrument(fields(node_id = config.node_id.0.clone()), skip_all)]
-async fn run<R: Serialize + DeserializeOwned + Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>) {
-    let mut node = RaftNode::new(config, core_rx, outbound_network, state_machine);
+async fn run<R: Serialize + DeserializeOwned + Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, rng: CharmRng) {
+    let mut node = RaftNode::new(config, core_rx, outbound_network, state_machine, rng);
     loop {
         node.tick().await;
     }
 }
 
-pub fn run_core<R: Serialize + DeserializeOwned + Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>) {
-    tokio::spawn(run(config, core_rx, outbound_network, state_machine));
+pub fn run_core<R: Serialize + DeserializeOwned + Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, rng: CharmRng) {
+    tokio::spawn(run(config, core_rx, outbound_network, state_machine, rng));
 }
 
 

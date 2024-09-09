@@ -1,7 +1,7 @@
+use crate::rng::CharmRng;
 use derive_builder::Builder;
-use std::time::Duration;
 use rand::Rng;
-use crate::rng::get_rng;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Builder)]
 pub struct RetryStrategy {
@@ -30,12 +30,10 @@ pub struct RetryStrategy {
     /// The actual jitter will be a random value between `jitter_min` and `jitter_max`.
     #[builder(default = "1.2")]
     jitter_max: f64,
-}
 
-impl Default for RetryStrategy {
-    fn default() -> Self {
-        RetryStrategy::new()
-    }
+    /// The random number generator to use for jitter.
+    /// We need to pass one in for deterministic tests.
+    rng: CharmRng
 }
 
 impl RetryStrategyBuilder {
@@ -46,8 +44,8 @@ impl RetryStrategyBuilder {
 }
 
 impl RetryStrategy {
-    pub fn new() -> RetryStrategy {
-        RetryStrategyBuilder::default().build().unwrap()
+    pub fn with_seed(seed: u64) -> Self {
+        RetryStrategyBuilder::default().rng(CharmRng::new(seed)).build().unwrap()
     }
 
     fn validate(&self) {
@@ -58,13 +56,18 @@ impl RetryStrategy {
         assert!(self.jitter_max >= self.jitter_min);
     }
 
-    fn apply_jitter(&self, delay: Duration) -> Duration {
+    fn apply_jitter(&mut self, delay: Duration) -> Duration {
         let range = self.jitter_max - self.jitter_min;
-        let jitter = get_rng().gen::<f64>() * range + self.jitter_min;
+        let jitter = self.rng.gen::<f64>() * range + self.jitter_min;
         delay.mul_f64(jitter)
+    }
+
+    pub fn clone_rng(&self) -> CharmRng {
+        self.rng.clone()
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct RetryStrategyIterator {
     strategy: RetryStrategy,
     current: Duration,
@@ -74,7 +77,7 @@ pub struct RetryStrategyIterator {
 impl Iterator for RetryStrategyIterator {
     type Item = Duration;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<Duration> {
         // Cap the total time spent on retries.
         if self.so_far >= self.strategy.total_retry_time {
             return None;
@@ -114,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_retry_strategy() {
-        let strategy = RetryStrategyBuilder::default().no_jitter().build().expect("valid");
+        let strategy = RetryStrategyBuilder::default().rng(CharmRng::new(0)).no_jitter().build().expect("valid");
         let mut iter = strategy.into_iter();
         assert_eq!(iter.next(), Some(Duration::from_millis(100)));
         assert_eq!(iter.next(), Some(Duration::from_millis(200)));

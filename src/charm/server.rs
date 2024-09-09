@@ -6,6 +6,7 @@ use crate::charm::state_machine::CharmStateMachineRequest;
 use crate::raft::core::error::RaftCoreError::NotLeader;
 use crate::raft::types::NodeId;
 use crate::raft::RaftHandle;
+use crate::rng::CharmRng;
 use dashmap::DashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
@@ -16,6 +17,7 @@ use tonic::{async_trait, Request, Response, Status};
 struct CharmServerImpl {
     raft_handle: RaftHandle<CharmStateMachineRequest>,
     clients: DashMap<NodeId, EasyCharmClient>,
+    rng: CharmRng,
 }
 
 impl CharmServerImpl {
@@ -25,8 +27,11 @@ impl CharmServerImpl {
         let client_ref_res = entry.or_try_insert_with(|| {
             // We use a tight retry strategy here because we are forwarding the request to the leader.
             // If the leader is unreachable, it probably won't be the leader for long.
-            let retry_strategy = RetryStrategyBuilder::default().total_retry_time(Duration::from_secs(1)).build().unwrap();
-            EasyCharmClient::with_retry_strategy(leader.0.clone(), retry_strategy)
+            let retry_strategy = RetryStrategyBuilder::default()
+                .rng(self.rng.clone())
+                .total_retry_time(Duration::from_secs(1))
+                .build().unwrap();
+            EasyCharmClient::new(leader.0.clone(), retry_strategy)
         });
         let client_or_status = client_ref_res.map_err(|_| Status::internal(format!("leader address {} is not valid", leader.0)));
         let client = client_or_status?;
@@ -129,10 +134,10 @@ impl Charm for CharmServerImpl {
     }
 }
 
-pub fn run_server(port: u16, raft_handle: RaftHandle<CharmStateMachineRequest>) {
+pub fn run_server(port: u16, raft_handle: RaftHandle<CharmStateMachineRequest>, rng: CharmRng) {
     let addr = (IpAddr::from(Ipv4Addr::UNSPECIFIED), port).into();
     let clients = DashMap::new();
-    let charm_server = CharmServerImpl { raft_handle, clients };
+    let charm_server = CharmServerImpl { raft_handle, clients, rng };
 
     #[cfg(not(feature = "turmoil"))]
     spawn(async move {

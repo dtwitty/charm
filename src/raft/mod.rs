@@ -9,6 +9,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
+use crate::rng::CharmRng;
 
 pub mod messages;
 pub mod types;
@@ -41,7 +42,7 @@ impl<R: Send + 'static> RaftHandle<R> {
     }
 }
 
-pub fn run_raft<S: StateMachine>(config: RaftConfig, state_machine: S) -> RaftHandle<S::Request>
+pub fn run_raft<S: StateMachine>(config: RaftConfig, state_machine: S, rng: CharmRng) -> RaftHandle<S::Request>
 where
     S::Request: Serialize + DeserializeOwned + Send + 'static,
 {
@@ -56,6 +57,6 @@ where
 
     let port = config.node_id.0.split(":").last().unwrap().parse().unwrap();
     run_inbound_network(port, raft_handle.core_handle.clone());
-    run_core(config, to_core_rx, outbound_network_handle, state_machine_handle);
+    run_core(config, to_core_rx, outbound_network_handle, state_machine_handle, rng);
     raft_handle
 }

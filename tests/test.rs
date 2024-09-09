@@ -1,20 +1,45 @@
 use charm::charm::client::EasyCharmClient;
+use charm::charm::retry::RetryStrategyBuilder;
 use charm::charm::server::run_server;
 use charm::charm::state_machine::CharmStateMachine;
 use charm::raft::core::config::RaftConfigBuilder;
 use charm::raft::run_raft;
 use charm::raft::types::NodeId;
+use charm::rng::CharmRng;
 use std::future::pending;
 use std::time::Duration;
+use wyrand::WyRand;
 
 #[test]
 #[cfg(feature = "turmoil")]
 fn test_charm() -> turmoil::Result {
-    configure_tracing();
+    // Run a bunch of tests with different seeds to try to find a seed that causes a failure.
+    let mut bad_seed = None;
+    for seed in 0..100 {
+        let result = test_one(seed);
+        if result.is_err() {
+            eprintln!("Bad Seed: {}", seed);
+            bad_seed = Some(seed);
+            break;
+        }
+    }
+
+    if let Some(seed) = bad_seed {
+        // Rerun the test with the bad seed to get a backtrace.
+        // Add logging to the test to help debug the issue.
+        configure_tracing();
+        return test_one(seed);
+    }
+
+    Ok(())
+}
+
+
+fn test_one(seed: u64) -> turmoil::Result {
 
     let mut sim = turmoil::Builder::new()
         .simulation_duration(Duration::from_secs(60))
-        .build();
+        .build_with_rng(Box::new(WyRand::new(seed)));
 
     let host_names = vec![
         "hostA",
@@ -33,10 +58,11 @@ fn test_charm() -> turmoil::Result {
         sim.host(host_name.to_string(), move ||
             {
                 let config = config.clone();
+                let rng = CharmRng::new(seed);
                 async move {
                     let sm = CharmStateMachine::new();
-                    let raft_handle = run_raft(config, sm);
-                    run_server(12345, raft_handle);
+                    let raft_handle = run_raft(config, sm, rng.clone());
+                    run_server(12345, raft_handle, rng);
                     pending::<()>().await;
                     Ok(())
                 }
@@ -44,12 +70,12 @@ fn test_charm() -> turmoil::Result {
     }
 
     sim.client("client", async move {
-        let client = EasyCharmClient::new("http://hostA:12345".to_string())?;
+        let retry_strategy = RetryStrategyBuilder::default().rng(CharmRng::new(seed)).build().expect("valid");
+        let client = EasyCharmClient::new("http://hostA:12345".to_string(), retry_strategy)?;
         client.put("hello".to_string(), "world".to_string()).await?;
         let value = client.get("hello".to_string()).await?;
         assert_eq!(value, Some("world".to_string()));
         client.delete("hello".to_string()).await?;
-        return Err("Not found".into());
         let value = client.get("hello".to_string()).await?;
         assert_eq!(value, None);
         Ok(())
