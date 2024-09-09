@@ -33,7 +33,7 @@ impl<R: Send + 'static> Raft for InboundNetwork<R> {
 }
 
 pub fn run_inbound_network<R: Send + 'static>(port: u16, handle: RaftCoreHandle<R>) {
-    let addr = (IpAddr::from(Ipv4Addr::UNSPECIFIED), port).into();
+    let addr = (IpAddr::from(Ipv4Addr::UNSPECIFIED), port);
     let network = InboundNetwork { handle };
 
     #[cfg(not(feature = "turmoil"))]

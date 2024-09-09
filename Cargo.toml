@@ -45,3 +45,15 @@ tonic-build = "0.12.2"
 
 [features]
 turmoil = ["dep:turmoil"]
+
+[profile.dev]
+debug = true
+opt-level = 3
+
+[profile.test]
+debug = true
+opt-level = 3
+
+[profile.release]
+debug = true
+opt-level = 3

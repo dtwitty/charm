@@ -1,4 +1,5 @@
 use crate::charm::client::EasyCharmClient;
+use crate::charm::config::CharmConfig;
 use crate::charm::pb::charm_server::{Charm, CharmServer};
 use crate::charm::pb::{DeleteRequest, DeleteResponse, GetRequest, GetResponse, PutRequest, PutResponse};
 use crate::charm::retry::RetryStrategyBuilder;
@@ -15,6 +16,7 @@ use tokio::sync::oneshot;
 use tonic::{async_trait, Request, Response, Status};
 
 struct CharmServerImpl {
+    config: CharmConfig,
     raft_handle: RaftHandle<CharmStateMachineRequest>,
     clients: DashMap<NodeId, EasyCharmClient>,
     rng: CharmRng,
@@ -31,12 +33,24 @@ impl CharmServerImpl {
                 .rng(self.rng.clone())
                 .total_retry_time(Duration::from_secs(1))
                 .build().unwrap();
-            EasyCharmClient::new(leader.0.clone(), retry_strategy)
+            let addr = self.get_addr_for_leader(&leader)?;
+            EasyCharmClient::new(addr, retry_strategy)
         });
         let client_or_status = client_ref_res.map_err(|_| Status::internal(format!("leader address {} is not valid", leader.0)));
         let client = client_or_status?;
         // Clone and drop the ref to avoid holding the lock.
         Ok(client.clone())
+    }
+
+    fn get_addr_for_leader(&self, leader: &NodeId) -> anyhow::Result<String> {
+        // Get the host off the leader node ID.
+        let leader_host = leader.0.split(':').next().unwrap();
+        // Look in the config for a peer with the same host.
+        self.config.peer_addrs
+            .iter()
+            .find(|peer| peer.starts_with(leader_host))
+            .cloned()
+            .ok_or(anyhow::anyhow!("no peer found for leader `{}`", leader.0))
     }
 }
 
@@ -134,10 +148,11 @@ impl Charm for CharmServerImpl {
     }
 }
 
-pub fn run_server(port: u16, raft_handle: RaftHandle<CharmStateMachineRequest>, rng: CharmRng) {
-    let addr = (IpAddr::from(Ipv4Addr::UNSPECIFIED), port).into();
+pub fn run_server(config: CharmConfig, raft_handle: RaftHandle<CharmStateMachineRequest>, rng: CharmRng) {
+    let port = config.listen_addr.split(':').last().unwrap().parse().unwrap();
+    let addr = (IpAddr::from(Ipv4Addr::UNSPECIFIED), port);
     let clients = DashMap::new();
-    let charm_server = CharmServerImpl { raft_handle, clients, rng };
+    let charm_server = CharmServerImpl { config, raft_handle, clients, rng };
 
     #[cfg(not(feature = "turmoil"))]
     spawn(async move {

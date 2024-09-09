@@ -1,4 +1,5 @@
 use charm::charm::client::EasyCharmClient;
+use charm::charm::config::CharmConfig;
 use charm::charm::retry::RetryStrategyBuilder;
 use charm::charm::server::run_server;
 use charm::charm::state_machine::CharmStateMachine;
@@ -57,18 +58,23 @@ fn test_one(seed: u64) -> turmoil::Result {
         let seed = seed_gen.next_u64();
         let node_id = NodeId(format!("http://{}:54321", host_name));
         let other_nodes = other_nodes.clone().into_iter().filter(|x| x != &node_id).collect::<Vec<_>>();
-        let config = RaftConfigBuilder::default()
+        let raft_config = RaftConfigBuilder::default()
             .node_id(node_id)
             .other_nodes(other_nodes)
             .build().unwrap();
+        let charm_config = CharmConfig {
+            listen_addr: format!("http://{}:12345", host_name),
+            peer_addrs: host_names.clone().into_iter().map(|x| format!("http://{}:12345", x)).collect(),
+        };
         sim.host(host_name.to_string(), move ||
             {
-                let config = config.clone();
+                let config = raft_config.clone();
                 let rng = CharmRng::new(seed);
+                let charm_config = charm_config.clone();
                 async move {
                     let sm = CharmStateMachine::new();
                     let raft_handle = run_raft(config, sm, rng.clone());
-                    run_server(12345, raft_handle, rng);
+                    run_server(charm_config, raft_handle, rng);
                     pending::<()>().await;
                     Ok(())
                 }
@@ -110,6 +116,7 @@ fn configure_tracing() {
     tracing::subscriber::set_global_default(
         tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_env_filter("charm=debug")
             .with_timer(SimElapsedTime)
             .finish(),
     )
