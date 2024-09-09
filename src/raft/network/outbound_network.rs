@@ -7,7 +7,7 @@ use tokio::spawn;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tonic::transport::{Channel, Endpoint};
 use tonic::Request;
-use tracing::{warn};
+use tracing::warn;
 
 pub enum RaftRequest {
     AppendEntries(AppendEntriesRequest),
@@ -87,7 +87,7 @@ pub fn run_outbound_network<R: Send + 'static>(handle: RaftCoreHandle<R>, rx: Un
 }
 
 async fn create_client(node_id: NodeId) -> Result<RaftClient<Channel>, tonic::transport::Error> {
-    let addr = node_id.0;
+    let addr = format!("http://{}:{}", node_id.host, node_id.port);
     let endpoint = Endpoint::from_shared(addr)?;
 
     #[cfg(not(feature = "turmoil"))]

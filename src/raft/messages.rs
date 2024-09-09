@@ -1,6 +1,24 @@
 use crate::raft::pb::*;
 use crate::raft::types::*;
 
+impl From<NodeIdPb> for NodeId {
+    fn from(pb: NodeIdPb) -> Self {
+        NodeId {
+            host: pb.host,
+            port: pb.port as u16,
+        }
+    }
+}
+
+impl From<NodeId> for NodeIdPb {
+    fn from(node_id: NodeId) -> Self {
+        NodeIdPb {
+            host: node_id.host,
+            port: node_id.port.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppendEntriesRequest {
     /// The leader's term.
@@ -25,7 +43,7 @@ pub struct AppendEntriesRequest {
 impl AppendEntriesRequest {
     pub fn from_pb(pb: &AppendEntriesRequestPb) -> Self {
         let term = Term(pb.term);
-        let leader_id = NodeId(pb.leader_id.clone());
+        let leader_id = pb.leader_id.clone().unwrap().into();
         let prev_log_index = Index(pb.prev_log_index);
         let prev_log_term = Term(pb.prev_log_term);
         let entries = pb.entries.iter().map(|e|
@@ -48,7 +66,7 @@ impl AppendEntriesRequest {
 
     pub fn to_pb(&self) -> AppendEntriesRequestPb {
         let term = self.term.0;
-        let leader_id = self.leader_id.0.clone();
+        let leader_id = Some(self.leader_id.clone().into());
         let prev_log_index = self.prev_log_index.0;
         let prev_log_term = self.prev_log_term.0;
         let entries = self.entries.iter().map(|e|
@@ -87,7 +105,7 @@ pub struct AppendEntriesResponse {
 
 impl AppendEntriesResponse {
     pub fn from_pb(pb: &AppendEntriesResponsePb) -> Self {
-        let node_id = NodeId(pb.node_id.clone());
+        let node_id = pb.node_id.clone().unwrap().into();
         let term = Term(pb.term);
         let success = pb.success;
         let last_log_index = Index(pb.last_log_index);
@@ -101,7 +119,7 @@ impl AppendEntriesResponse {
     }
 
     pub fn to_pb(&self) -> AppendEntriesResponsePb {
-        let node_id = self.node_id.0.clone();
+        let node_id = Some(self.node_id.clone().into());
         let term = self.term.0;
         let success = self.success;
         let last_log_index = self.last_log_index.0;
@@ -133,7 +151,7 @@ pub struct RequestVoteRequest {
 impl RequestVoteRequest {
     pub fn from_pb(pb: &RequestVoteRequestPb) -> Self {
         let term = Term(pb.term);
-        let candidate_id = NodeId(pb.candidate_id.clone());
+        let candidate_id = pb.candidate_id.clone().unwrap().into();
         let last_log_index = Index(pb.last_log_index);
         let last_log_term = Term(pb.last_log_term);
 
@@ -147,7 +165,7 @@ impl RequestVoteRequest {
 
     pub fn to_pb(&self) -> RequestVoteRequestPb {
         let term = self.term.0;
-        let candidate_id = self.candidate_id.0.clone();
+        let candidate_id = Some(self.candidate_id.clone().into());
         let last_log_index = self.last_log_index.0;
         let last_log_term = self.last_log_term.0;
 
@@ -174,7 +192,7 @@ pub struct RequestVoteResponse {
 
 impl RequestVoteResponse {
     pub fn from_pb(pb: &RequestVoteResponsePb) -> Self {
-        let node_id = NodeId(pb.node_id.clone());
+        let node_id = pb.node_id.clone().unwrap().into();
         let term = Term(pb.term);
         let vote_granted = pb.vote_granted;
 
@@ -186,7 +204,7 @@ impl RequestVoteResponse {
     }
 
     pub fn to_pb(&self) -> RequestVoteResponsePb {
-        let node_id = self.node_id.0.clone();
+        let node_id = Some(self.node_id.clone().into());
         let term = self.term.0;
         let vote_granted = self.vote_granted;
 

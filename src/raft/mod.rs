@@ -5,11 +5,11 @@ use crate::raft::core::run_core;
 use crate::raft::network::inbound_network::run_inbound_network;
 use crate::raft::network::outbound_network::{run_outbound_network, OutboundNetworkHandle};
 use crate::raft::state_machine::{run_state_machine_driver, StateMachine, StateMachineHandle};
+use crate::rng::CharmRng;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
-use crate::rng::CharmRng;
 
 pub mod messages;
 pub mod types;
@@ -54,9 +54,7 @@ where
     let state_machine_handle = StateMachineHandle::new(to_state_machine_tx);
     run_state_machine_driver(state_machine, to_state_machine_rx);
     run_outbound_network(raft_handle.core_handle.clone(), to_outbound_rx);
-
-    let port = config.node_id.0.split(":").last().unwrap().parse().unwrap();
-    run_inbound_network(port, raft_handle.core_handle.clone());
+    run_inbound_network(config.node_id.port, raft_handle.core_handle.clone());
     run_core(config, to_core_rx, outbound_network_handle, state_machine_handle, rng);
     raft_handle
 }

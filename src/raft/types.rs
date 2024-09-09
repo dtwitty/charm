@@ -29,7 +29,20 @@ impl Index {
 
 /// A unique identifier for a node in the cluster, typically an address like "host:port".
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, Ord)]
-pub struct NodeId(pub String);
+pub struct NodeId {
+    pub host: String,
+    pub port: u16,
+}
+
+impl NodeId {
+    pub fn to_string(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
+
+    pub fn to_addr(&self) -> String {
+        format!("http://{}:{}", self.host, self.port)
+    }
+}
 
 /// A command to be executed by the state machine.
 #[derive(Debug, Clone, PartialEq, Eq)]

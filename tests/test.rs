@@ -1,14 +1,8 @@
 use charm::charm::client::EasyCharmClient;
-use charm::charm::config::CharmConfig;
 use charm::charm::retry::RetryStrategyBuilder;
-use charm::charm::server::run_server;
-use charm::charm::state_machine::CharmStateMachine;
-use charm::raft::core::config::RaftConfigBuilder;
-use charm::raft::run_raft;
-use charm::raft::types::NodeId;
 use charm::rng::CharmRng;
+use charm::server::{run_charm_server, CharmPeer, CharmServerConfigBuilder};
 use rand::RngCore;
-use std::future::pending;
 use std::time::Duration;
 use wyrand::WyRand;
 
@@ -16,7 +10,7 @@ use wyrand::WyRand;
 #[cfg(feature = "turmoil")]
 fn test_charm() -> turmoil::Result {
     // Run a bunch of tests with different seeds to try to find a seed that causes a failure.
-    for seed in 1..100 {
+    for seed in 1..1000 {
         let res = test_one(seed);
         if let Err(e) = res {
             eprintln!("seed {} failed: {:?}", seed, e);
@@ -29,7 +23,7 @@ fn test_charm() -> turmoil::Result {
 #[test]
 #[cfg(feature = "turmoil")]
 fn test_seed() -> turmoil::Result {
-    let seed = 2;
+    let seed = 5;
     configure_tracing();
     test_one(seed)
 }
@@ -40,46 +34,45 @@ fn test_one(seed: u64) -> turmoil::Result {
     // The simulation uses this seed.
     let mut sim = turmoil::Builder::new()
         .simulation_duration(Duration::from_secs(3))
+        .max_message_latency(Duration::from_millis(10))
         .build_with_rng(Box::new(WyRand::new(seed)));
 
     // The rest are seeded deterministically but differently for each node and client.
     let mut seed_gen = WyRand::new(seed);
 
+    const RAFT_PORT: u16 = 54321;
+    const CHARM_PORT: u16 = 12345;
     let host_names = vec![
         "hostA",
         "hostB",
         "hostC",
     ];
 
-    let other_nodes = host_names.clone().iter().map(|x| NodeId(format!("http://{}:54321", x))).collect::<Vec<_>>();
-    for host_name in host_names.iter().cloned() {
+    for host_name in host_names.clone().iter().cloned() {
         let seed = seed_gen.next_u64();
-        let node_id = NodeId(format!("http://{}:54321", host_name));
-        let other_nodes = other_nodes.clone().into_iter().filter(|x| x != &node_id).collect::<Vec<_>>();
-        let raft_config = RaftConfigBuilder::default()
-            .node_id(node_id)
-            .other_nodes(other_nodes)
-            .build().unwrap();
-        let charm_config = CharmConfig {
-            listen_addr: format!("http://{}:12345", host_name),
-            peer_addrs: host_names
-                .clone()
-                .into_iter()
-                .filter(|h| h != &host_name)
-                .map(|x| format!("http://{}:12345", x))
-                .collect(),
-
-        };
+        let host_names = host_names.clone();
         sim.host(host_name.to_string(), move ||
             {
-                let config = raft_config.clone();
-                let rng = CharmRng::new(seed);
-                let charm_config = charm_config.clone();
+                let host_names = host_names.clone();
+                let charm_server_config = CharmServerConfigBuilder::default()
+                    .rng_seed(seed)
+                    .listen(
+                        CharmPeer {
+                            host: host_name.to_string(),
+                            charm_port: CHARM_PORT,
+                            raft_port: RAFT_PORT,
+                        })
+                    .peers(
+                        host_names.iter().filter(|&h| h != &host_name)
+                            .map(|h| CharmPeer {
+                                host: h.to_string(),
+                                charm_port: CHARM_PORT,
+                                raft_port: RAFT_PORT,
+                            })
+                            .collect())
+                    .build().unwrap();
                 async move {
-                    let sm = CharmStateMachine::new();
-                    let raft_handle = run_raft(config, sm, rng.clone());
-                    run_server(charm_config, raft_handle, rng);
-                    pending::<()>().await;
+                    run_charm_server(charm_server_config).await;
                     Ok(())
                 }
         });
