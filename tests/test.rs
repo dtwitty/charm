@@ -39,7 +39,7 @@ fn test_seed() -> turmoil::Result {
 fn test_one(seed: u64) -> turmoil::Result {
     // The simulation uses this seed.
     let mut sim = turmoil::Builder::new()
-        .simulation_duration(Duration::from_secs(60))
+        .simulation_duration(Duration::from_secs(10))
         .build_with_rng(Box::new(WyRand::new(seed)));
 
     // The rest are seeded deterministically but differently for each node and client.

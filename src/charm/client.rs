@@ -7,9 +7,11 @@ use std::time::Duration;
 use tokio_retry::Retry;
 use tonic::transport::Channel;
 use tonic::Response;
+use tracing::info;
 
 #[derive(Clone)]
 pub struct EasyCharmClient {
+    addr:String,
     client: CharmClient<Channel>,
     retry_strategy: RetryStrategy,
     circuit_breaker: StateMachine<SuccessRateOverTimeWindow<RetryStrategyIterator>, ()>,
@@ -17,7 +19,7 @@ pub struct EasyCharmClient {
 
 impl EasyCharmClient {
     pub fn new(addr: String, retry_strategy: RetryStrategy) -> anyhow::Result<Self> {
-        let client = make_charm_client(addr)?;
+        let client = make_charm_client(addr.clone())?;
         let window = Duration::from_secs(20);
 
         let backoff = RetryStrategyBuilder::default()
@@ -28,6 +30,7 @@ impl EasyCharmClient {
         let failure_policy = success_rate_over_time_window(0.9, 20, window, backoff.into_iter());
         let circuit_breaker = Config::new().failure_policy(failure_policy).build();
         Ok(EasyCharmClient {
+            addr,
             client,
             retry_strategy,
             circuit_breaker,
@@ -35,8 +38,9 @@ impl EasyCharmClient {
     }
 
 
-    #[tracing::instrument(level="debug", skip(self))]
+    #[tracing::instrument(fields(addr=self.addr.clone()), skip(self))]
     pub async fn get(&self, key: String) -> anyhow::Result<Option<String>> {
+        info!("Getting key: {}", key);
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;
@@ -47,8 +51,9 @@ impl EasyCharmClient {
         }).await
     }
 
-    #[tracing::instrument(level="debug", skip(self))]
+    #[tracing::instrument(fields(addr=self.addr.clone()), skip(self))]
     pub async fn put(&self, key: String, value: String) -> anyhow::Result<()> {
+        info!("Putting key: {} value: {}", key, value);
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;
@@ -59,8 +64,9 @@ impl EasyCharmClient {
         }).await
     }
 
-    #[tracing::instrument(level="debug", skip(self))]
+    #[tracing::instrument(fields(addr=self.addr.clone()), skip(self))]
     pub async fn delete(&self, key: String) -> anyhow::Result<()> {
+        info!("Deleting key: {}", key);
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;

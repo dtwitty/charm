@@ -78,16 +78,17 @@ impl Iterator for RetryStrategyIterator {
     type Item = Duration;
 
     fn next(&mut self) -> Option<Duration> {
-        // Cap the total time spent on retries.
-        if self.so_far >= self.strategy.total_retry_time {
-            return None;
-        }
 
         // Apply jitter.
         let delay = self.strategy.apply_jitter(self.current).min(self.strategy.max_delay);
 
         // Exponential backoff.
         self.current = self.current.mul_f64(self.strategy.factor);
+
+        // Cap the total time spent on retries.
+        if self.so_far + delay >= self.strategy.total_retry_time {
+            return None;
+        }
 
         // Update the total time spent on retries.
         self.so_far += delay;
@@ -126,8 +127,20 @@ mod tests {
         assert_eq!(iter.next(), Some(Duration::from_secs(1)));
         assert_eq!(iter.next(), Some(Duration::from_secs(1)));
         assert_eq!(iter.next(), Some(Duration::from_secs(1)));
-        assert_eq!(iter.next(), Some(Duration::from_secs(1)));
         assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_total_retry_time() {
+        for seed in 0..1000 {
+            let strategy = RetryStrategyBuilder::default()
+                .rng(CharmRng::new(seed))
+                .total_retry_time(Duration::from_secs(5))
+                .build()
+                .expect("valid");
+            let total_time: Duration = strategy.into_iter().sum();
+            assert!(total_time <= Duration::from_secs(5), "total_time: {:?}", total_time);
+        }
     }
 }
 

@@ -527,7 +527,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
     }
 
     fn become_leader(&mut self) {
-        info!("Becoming leader!");
+        info!("Becoming leader in term {:?}!", self.current_term);
         let mut peer_states = HashMap::new();
 
         for node_id in &self.config.other_nodes {
@@ -627,7 +627,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
     }
 }
 
-#[tracing::instrument(fields(node_id = config.node_id.0.clone()), skip_all)]
+#[tracing::instrument(skip_all)]
 async fn run<R: Serialize + DeserializeOwned + Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, rng: CharmRng) {
     let mut node = RaftNode::new(config, core_rx, outbound_network, state_machine, rng);
     loop {
