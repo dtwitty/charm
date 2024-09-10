@@ -44,7 +44,8 @@ impl EasyCharmClient {
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;
-            let request = tonic::Request::new(GetRequest { key: key.clone() });
+            let mut request = tonic::Request::new(GetRequest { key: key.clone() });
+            request.set_timeout(Duration::from_secs(1));
             let result = self.client.clone().get(request).await;
             let response = self.instrument_response(result)?;
             Ok(response.value)
@@ -57,7 +58,8 @@ impl EasyCharmClient {
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;
-            let request = tonic::Request::new(PutRequest { key: key.clone(), value: value.clone() });
+            let mut request = tonic::Request::new(PutRequest { key: key.clone(), value: value.clone() });
+            request.set_timeout(Duration::from_secs(1));
             let result = self.client.clone().put(request).await;
             self.instrument_response(result)?;
             Ok(())
@@ -70,7 +72,8 @@ impl EasyCharmClient {
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;
-            let request = tonic::Request::new(DeleteRequest { key: key.clone() });
+            let mut request = tonic::Request::new(DeleteRequest { key: key.clone() });
+            request.set_timeout(Duration::from_secs(1));
             let result = self.client.clone().delete(request).await;
             self.instrument_response(result)?;
             Ok(())

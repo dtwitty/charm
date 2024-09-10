@@ -1,4 +1,3 @@
-use std::fmt::Pointer;
 use charm::charm::client::EasyCharmClient;
 use charm::charm::retry::RetryStrategyBuilder;
 use charm::rng::CharmRng;
@@ -25,7 +24,7 @@ fn test_charm() -> turmoil::Result {
 #[test]
 #[cfg(feature = "turmoil")]
 fn test_seed() -> turmoil::Result {
-    let seed = 6;
+    let seed = 10;
     configure_tracing();
     test_one(seed)
 }
@@ -117,7 +116,7 @@ impl tracing_subscriber::fmt::time::FormatTime for SimElapsedTime {
 fn configure_tracing() {
     tracing::subscriber::set_global_default(
         tracing_subscriber::fmt()
-            .with_env_filter("info,turmoil=trace,charm::charm=debug,charm::raft::core=debug")
+            .with_env_filter("info,charm::charm=debug")
             .with_timer(SimElapsedTime)
             .finish(),
     )
