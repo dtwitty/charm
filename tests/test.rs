@@ -25,7 +25,7 @@ fn test_charm() -> turmoil::Result {
 #[test]
 #[cfg(feature = "turmoil")]
 fn test_seed() -> turmoil::Result {
-    let seed = 3;
+    let seed = 6;
     configure_tracing();
     test_one(seed)
 }
