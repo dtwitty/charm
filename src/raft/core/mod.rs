@@ -46,6 +46,7 @@ struct CandidateState {
     election_timer: Shared<Sleep>,
 }
 
+#[derive(Debug)]
 struct PeerState {
     /// The index of the next log entry to send to that server.
     next_index: Index,
@@ -69,8 +70,12 @@ impl LeaderState {
     }
 
     /// Returns the highest index that a majority of the cluster has reached.
-    fn get_majority_match(&self) -> Index {
+    fn get_majority_match(&self, our_index: Index) -> Index {
+        // Get the match indexes of peer nodes.
         let mut match_indexes = self.peer_states.values().map(|peer_state| peer_state.match_index).collect::<Vec<_>>();
+        // Add our own index.
+        match_indexes.push(our_index);
+
         // Sort the matches in reverse order.
         match_indexes.sort_by(|a, b| b.cmp(a));
         // Get the match index of the N/2 most-advanced node.
@@ -377,13 +382,13 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
         // If we are not the leader, we don't care about these responses.
         if let Leader(ref mut leader_state) = self.role {
             if res.success {
-                debug!("Request was successful. Updating peer state for {:?}.", res.node_id);
                 let peer_state = leader_state.get_mut_peer_state(&res.node_id);
                 peer_state.match_index = res.last_log_index;
                 peer_state.next_index = res.last_log_index.next();
+                debug!("Request was successful. Peer state for {:?} is now {:?}.", res.node_id, peer_state);
 
                 // Try to update the commit index.
-                let majority_match = leader_state.get_majority_match();
+                let majority_match = leader_state.get_majority_match(self.log.last_index());
                 if majority_match > self.commit_index {
                     debug!("Cluster majority advanced to index {:?}. Updating commit index.", majority_match);
 
@@ -485,11 +490,11 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
         match self.role {
             Candidate(ref mut state) => {
                 if res.vote_granted {
-                    debug!("Vote granted by {:?}.", res.node_id);
                     state.votes_received += 1;
 
 
                     let majority = self.config.other_nodes.len() / 2 + 1;
+                    debug!("Vote granted by {:?}. We now have {:?} out of {:?} needed votes", res.node_id, state.votes_received, majority);
                     if state.votes_received > majority as u64 && !self.role.is_leader() {
                         // Great success!
                         self.become_leader();
@@ -510,19 +515,18 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
     fn handle_propose(&mut self, request: R, commit_tx: oneshot::Sender<Result<(), RaftCoreError>>) {
         match self.role {
             Candidate(_) => {
-                debug!("Not leader, but a follower. Failing proposal.");
+                debug!("Not the leader, but a candidate. Failing proposal.");
                 let res = Err(RaftCoreError::NotLeader { leader_id: None });
                 commit_tx.send(res).unwrap();
             }
 
             Follower(ref follower_state) => {
-                debug!("Not leader, but a candidate. Failing proposal.");
+                debug!("Not the leader, but a follower. Failing proposal.");
                 let res = Err(RaftCoreError::NotLeader { leader_id: follower_state.leader_id.clone() });
                 commit_tx.send(res).unwrap();
             }
 
             Leader(_) => {
-                debug!("Leader received proposal. Appending to log.");
                 let serialized = serde_json::to_vec(&request).unwrap();
                 let log_entry = LogEntry { term: self.current_term, data: Data(serialized) };
                 let index = self.log.append(log_entry);
@@ -533,7 +537,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
     }
 
     fn become_leader(&mut self) {
-        info!("Becoming leader in term {:?}!", self.current_term);
+        info!("Becoming the leader in term {:?}!", self.current_term);
         let mut peer_states = HashMap::new();
 
         for node_id in &self.config.other_nodes {
@@ -584,7 +588,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
     // Convert to follower if the term is higher than the current term.
     fn check_incoming_term(&mut self, term: Term) {
         if self.current_term < term {
-            info!("Received message with higher term. Converting to follower.");
+            info!("Received message with term {:?} higher than our term {:?}. Converting to follower.", term, self.current_term);
             self.current_term = term;
             self.convert_to_follower();
         }

@@ -1,9 +1,11 @@
+use std::fmt::Pointer;
 use charm::charm::client::EasyCharmClient;
 use charm::charm::retry::RetryStrategyBuilder;
 use charm::rng::CharmRng;
 use charm::server::{run_charm_server, CharmPeer, CharmServerConfigBuilder};
 use rand::RngCore;
 use std::time::Duration;
+use turmoil::Sim;
 use wyrand::WyRand;
 
 #[test]
@@ -23,7 +25,7 @@ fn test_charm() -> turmoil::Result {
 #[test]
 #[cfg(feature = "turmoil")]
 fn test_seed() -> turmoil::Result {
-    let seed = 5;
+    let seed = 3;
     configure_tracing();
     test_one(seed)
 }
@@ -33,20 +35,42 @@ fn test_seed() -> turmoil::Result {
 fn test_one(seed: u64) -> turmoil::Result {
     // The simulation uses this seed.
     let mut sim = turmoil::Builder::new()
-        .simulation_duration(Duration::from_secs(3))
-        .max_message_latency(Duration::from_millis(10))
+        .simulation_duration(Duration::from_secs(5))
+        .min_message_latency(Duration::from_millis(1))
+        .max_message_latency(Duration::from_millis(50))
+        .enable_random_order()
+        .fail_rate(0.01)
+        .repair_rate(0.9)
         .build_with_rng(Box::new(WyRand::new(seed)));
 
     // The rest are seeded deterministically but differently for each node and client.
     let mut seed_gen = WyRand::new(seed);
 
+    // Run a cluster of 3 nodes.
+    run_cluster(&mut sim, &mut seed_gen, 3);
+
+
+    let client_seed = seed_gen.next_u64();
+    sim.client("client", async move {
+        let retry_strategy = RetryStrategyBuilder::default().rng(CharmRng::new(client_seed)).build().expect("valid");
+        let client = EasyCharmClient::new("http://host0:12345".to_string(), retry_strategy)?;
+        client.put("hello".to_string(), "world".to_string()).await?;
+        let value = client.get("hello".to_string()).await?;
+        assert_eq!(value, Some("world".to_string()));
+        client.delete("hello".to_string()).await?;
+        let value = client.get("hello".to_string()).await?;
+        assert_eq!(value, None);
+        Ok(())
+    });
+
+    sim.run()
+}
+
+#[cfg(feature = "turmoil")]
+fn run_cluster(sim: &mut Sim, seed_gen: &mut impl RngCore, num_nodes: usize) {
     const RAFT_PORT: u16 = 54321;
     const CHARM_PORT: u16 = 12345;
-    let host_names = vec![
-        "hostA",
-        "hostB",
-        "hostC",
-    ];
+    let host_names = (0..num_nodes).map(|i| format!("host{}", i)).collect::<Vec<_>>();
 
     for host_name in host_names.clone().iter().cloned() {
         let seed = seed_gen.next_u64();
@@ -75,23 +99,8 @@ fn test_one(seed: u64) -> turmoil::Result {
                     run_charm_server(charm_server_config).await;
                     Ok(())
                 }
-        });
+            });
     }
-
-    let client_seed = seed_gen.next_u64();
-    sim.client("client", async move {
-        let retry_strategy = RetryStrategyBuilder::default().rng(CharmRng::new(client_seed)).build().expect("valid");
-        let client = EasyCharmClient::new("http://hostA:12345".to_string(), retry_strategy)?;
-        client.put("hello".to_string(), "world".to_string()).await?;
-        let value = client.get("hello".to_string()).await?;
-        assert_eq!(value, Some("world".to_string()));
-        client.delete("hello".to_string()).await?;
-        let value = client.get("hello".to_string()).await?;
-        assert_eq!(value, None);
-        Ok(())
-    });
-
-    sim.run()
 }
 
 #[derive(Clone)]
@@ -106,14 +115,9 @@ impl tracing_subscriber::fmt::time::FormatTime for SimElapsedTime {
 }
 
 fn configure_tracing() {
-    if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", "info");
-    }
-
     tracing::subscriber::set_global_default(
         tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .with_env_filter("info,charm::charm=debug")
+            .with_env_filter("info,turmoil=trace,charm::charm=debug,charm::raft::core=debug")
             .with_timer(SimElapsedTime)
             .finish(),
     )

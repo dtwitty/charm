@@ -57,10 +57,7 @@ impl CharmServerImpl {
 
 #[async_trait]
 impl Charm for CharmServerImpl {
-    #[tracing::instrument(
-        skip_all,
-        fields(host = self.config.listen.host.clone())
-    )]
+    #[tracing::instrument(skip_all)]
     async fn get(&self, request: Request<GetRequest>) -> Result<Response<GetResponse>, Status> {
         let request = request.into_inner();
         debug!("Get `{:?}`", request.key);
@@ -78,7 +75,7 @@ impl Charm for CharmServerImpl {
             }
 
             Err(NotLeader { leader_id: Some(leader) }) => {
-                // We are not the leader, but we know who is.
+                debug!("Not the leader, forwarding to `{:?}`", leader);
                 let client = self.get_client(leader.clone()).map_err(|e| Status::internal(e.to_string()))?;
                 // Forward the request to the leader.
                 let response = client.get(key).await.map_err(|e| Status::internal(e.to_string()))?;
@@ -86,16 +83,13 @@ impl Charm for CharmServerImpl {
             }
 
             Err(NotLeader { leader_id: None }) => {
-                // We are not the leader, and we don't know who is.
+                debug!("Not the leader and don't know who is");
                 Err(Status::unavailable("not the leader and don't know who is".to_string()))
             }
         }
     }
 
-    #[tracing::instrument(
-        skip_all,
-        fields(host = self.config.listen.host.clone())
-    )]
+    #[tracing::instrument(skip_all)]
     async fn put(&self, request: Request<PutRequest>) -> Result<Response<PutResponse>, Status> {
         let request = request.into_inner();
         let key = request.key;
@@ -113,7 +107,7 @@ impl Charm for CharmServerImpl {
             }
 
             Err(NotLeader { leader_id: Some(leader) }) => {
-                // We are not the leader, but we know who is.
+                debug!("Not the leader, forwarding to `{:?}`", leader);
                 let client = self.get_client(leader.clone()).map_err(|e| Status::internal(e.to_string()))?;
                 // Forward the request to the leader.
                 client.put(key, value).await.map_err(|e| Status::internal(e.to_string()))?;
@@ -121,16 +115,13 @@ impl Charm for CharmServerImpl {
             }
 
             Err(NotLeader { leader_id: None }) => {
-                // We are not the leader, and we don't know who is.
+                debug!("Not the leader and don't know who is");
                 Err(Status::unavailable("not the leader and don't know who is".to_string()))
             }
         }
     }
 
-    #[tracing::instrument(
-        skip_all,
-        fields(host = self.config.listen.host.clone())
-    )]
+    #[tracing::instrument(skip_all)]
     async fn delete(&self, request: Request<DeleteRequest>) -> Result<Response<DeleteResponse>, Status> {
         let request = request.into_inner();
         let key = request.key;
@@ -147,7 +138,7 @@ impl Charm for CharmServerImpl {
             }
 
             Err(NotLeader { leader_id: Some(leader) }) => {
-                // We are not the leader, but we know who is.
+                debug!("Not the leader, forwarding to `{:?}`", leader);
                 let client = self.get_client(leader.clone()).map_err(|e| Status::internal(e.to_string()))?;
                 // Forward the request to the leader.
                 client.delete(key).await.map_err(|e| Status::internal(e.to_string()))?;
@@ -155,7 +146,7 @@ impl Charm for CharmServerImpl {
             }
 
             Err(NotLeader { leader_id: None }) => {
-                // We are not the leader, and we don't know who is.
+                debug!("Not the leader and don't know who is");
                 Err(Status::unavailable("not the leader and don't know who is".to_string()))
             }
         }
