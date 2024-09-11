@@ -36,6 +36,8 @@ turmoil = { version = "0.6.3", optional = true }
 wyrand = "0.2.1"
 hyper = "1.4.1"
 hyper-util = { version = "0.1.7", features = ["full"] }
+log = "0.4.22"
+rand_distr = "0.4.3"
 
 [dev-dependencies]
 turmoil = "0.6.3"

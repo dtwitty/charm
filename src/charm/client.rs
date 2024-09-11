@@ -2,19 +2,39 @@ use crate::charm::pb::charm_client::CharmClient;
 use crate::charm::pb::{DeleteRequest, GetRequest, PutRequest};
 use crate::charm::retry::{RetryStrategy, RetryStrategyBuilder, RetryStrategyIterator};
 use failsafe::failure_policy::{success_rate_over_time_window, SuccessRateOverTimeWindow};
-use failsafe::{Config, StateMachine};
+use failsafe::{Config, Instrument, StateMachine};
 use std::time::Duration;
 use tokio_retry::Retry;
 use tonic::transport::Channel;
 use tonic::Response;
-use tracing::{debug, instrument};
+use tracing::{debug, info, instrument, warn};
 
 #[derive(Clone)]
 pub struct EasyCharmClient {
     addr:String,
     client: CharmClient<Channel>,
     retry_strategy: RetryStrategy,
-    circuit_breaker: StateMachine<SuccessRateOverTimeWindow<RetryStrategyIterator>, ()>,
+    circuit_breaker: StateMachine<SuccessRateOverTimeWindow<RetryStrategyIterator>, CircuitBreakerInstrument>,
+}
+
+struct CircuitBreakerInstrument {}
+
+impl Instrument for CircuitBreakerInstrument {
+    fn on_call_rejected(&self) {
+        warn!("Circuit breaker rejected a call");
+    }
+
+    fn on_open(&self) {
+        warn!("Circuit breaker is open");
+    }
+
+    fn on_half_open(&self) {
+        warn!("Circuit breaker is half open");
+    }
+
+    fn on_closed(&self) {
+        info!("Circuit breaker is closed");
+    }
 }
 
 impl EasyCharmClient {
@@ -28,7 +48,10 @@ impl EasyCharmClient {
             .max_delay(Duration::from_secs(10))
             .build()?;
         let failure_policy = success_rate_over_time_window(0.9, 20, window, backoff.into_iter());
-        let circuit_breaker = Config::new().failure_policy(failure_policy).build();
+        let circuit_breaker = Config::new()
+            .failure_policy(failure_policy)
+            .instrument(CircuitBreakerInstrument {})
+            .build();
         Ok(EasyCharmClient {
             addr,
             client,

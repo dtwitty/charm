@@ -3,6 +3,7 @@ use crate::raft::messages::*;
 use crate::raft::pb::raft_client::RaftClient;
 use crate::raft::types::NodeId;
 use std::collections::HashMap;
+use std::time::Duration;
 use tokio::spawn;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tonic::transport::{Channel, Endpoint};
@@ -58,21 +59,35 @@ async fn run<R: Send + 'static>(handle: RaftCoreHandle<R>, mut rx: UnboundedRece
                 match request {
                     RaftRequest::AppendEntries(request) => {
                         let request_pb = request.to_pb();
-                        let request = Request::new(request_pb);
-                        if let Ok(response) = client.append_entries(request).await {
-                            let response_pb = response.into_inner();
-                            let response = AppendEntriesResponse::from_pb(&response_pb);
-                            handle_clone.append_entries_response(response);
+                        let mut request = Request::new(request_pb);
+                        request.set_timeout(Duration::from_secs(1));
+                        match client.append_entries(request).await {
+                            Ok(response) => {
+                                let response_pb = response.into_inner();
+                                let response = AppendEntriesResponse::from_pb(&response_pb);
+                                handle_clone.append_entries_response(response);
+                            }
+
+                            Err(e) => {
+                                warn!("Failed to send AppendEntries to node {:?}. Error: {:?}", node_id, e);
+                            }
                         }
                     }
 
                     RaftRequest::RequestVote(request) => {
                         let request_pb = request.to_pb();
-                        let request = Request::new(request_pb);
-                        if let Ok(response) = client.request_vote(request).await {
-                            let response_pb = response.into_inner();
-                            let response = RequestVoteResponse::from_pb(&response_pb);
-                            handle_clone.request_vote_response(response);
+                        let mut request = Request::new(request_pb);
+                        request.set_timeout(Duration::from_secs(1));
+                        match client.request_vote(request).await {
+                            Ok(response) => {
+                                let response_pb = response.into_inner();
+                                let response = RequestVoteResponse::from_pb(&response_pb);
+                                handle_clone.request_vote_response(response);
+                            }
+
+                            Err(e) => {
+                                warn!("Failed to send RequestVote to node {:?}. Error: {:?}", node_id, e);
+                            }
                         }
                     }
                 }
