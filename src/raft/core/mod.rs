@@ -126,6 +126,10 @@ pub struct RaftNode<R: Serialize + DeserializeOwned + Send + 'static> {
     /// Initialized to 0, increases monotonically.
     commit_index: Index,
 
+    /// The index of the last log entry applied to the state machine.
+    /// Initialized to 0, increases monotonically.
+    last_applied: Index,
+
     /// State that only exists if this node is a leader.
     /// If this node is not a leader, this field is `None`.
     role: Role,
@@ -152,6 +156,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
             voted_for: None,
             log: Log::new(),
             commit_index: Index(0),
+            last_applied: Index(0),
             role: Follower(follower_state),
             core_rx,
             outbound_network,
@@ -308,6 +313,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
             }
             self.commit_index = req.leader_commit.min(self.log.last_index());
             self.update_leader(req.leader_id.clone());
+            self.apply_committed();
             return self.append_entries_response(true);
         }
 
@@ -336,6 +342,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
 
         debug!("Sending successful response.");
         self.update_leader(req.leader_id.clone());
+        self.apply_committed();
         self.append_entries_response(true)
     }
 
@@ -391,6 +398,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
                 let majority_match = leader_state.get_majority_match(self.log.last_index());
                 if majority_match > self.commit_index {
                     debug!("Cluster majority advanced to index {:?}. Updating commit index.", majority_match);
+                    self.commit_index = majority_match;
 
                     // Split off futures that can be completed.
                     let mut to_complete = self.proposals.split_off(&(majority_match.next()));
@@ -401,9 +409,6 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
                         proposal.commit_tx.send(Ok(())).unwrap();
                         self.state_machine.apply(proposal.req);
                     }
-
-                    // Mark that we have committed!
-                    self.commit_index = majority_match;
                 }
             } else {
                 // The AppendEntriesRequest failed. Decrement the next_index. We will retry later.
@@ -604,10 +609,24 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
     fn update_leader(&mut self, leader_id: NodeId) {
         let election_timeout = self.get_election_timeout();
         if let Follower(ref mut follower_state) = self.role {
+            if let Some(ref old_leader) = follower_state.leader_id {
+                if old_leader != &leader_id {
+                    info!("Leader changed from {:?} to {:?}.", old_leader, leader_id);
+                }
+            }
             follower_state.leader_id = Some(leader_id);
             follower_state.election_timer = sleep(election_timeout).shared();
         } else {
             panic!("Expected follower role.");
+        }
+    }
+
+    fn apply_committed(&mut self) {
+        while self.last_applied < self.commit_index {
+            self.last_applied = self.last_applied.next();
+            let entry = self.log.get(self.last_applied).expect("entry not found");
+            let req: R = serde_json::from_slice(&entry.data.0).expect("deserialization failed");
+            self.state_machine.apply(req);
         }
     }
 
