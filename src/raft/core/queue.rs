@@ -1,5 +1,5 @@
 use crate::raft::core::error::RaftCoreError;
-use crate::raft::messages::*;
+use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, RequestVoteRequest, RequestVoteResponse};
 use tokio::sync::oneshot;
 use tracing::Span;
 

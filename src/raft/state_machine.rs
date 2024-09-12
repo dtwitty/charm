@@ -13,7 +13,7 @@ pub struct StateMachineHandle<R> {
 }
 
 impl<R> StateMachineHandle<R> {
-    pub fn new(tx: UnboundedSender<R>) -> Self {
+    #[must_use] pub fn new(tx: UnboundedSender<R>) -> Self {
         Self { tx }
     }
 

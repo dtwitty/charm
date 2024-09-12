@@ -10,8 +10,14 @@ pub struct CharmStateMachine {
     map: HashMap<String, String>,
 }
 
+impl Default for CharmStateMachine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CharmStateMachine {
-    pub fn new() -> CharmStateMachine {
+    #[must_use] pub fn new() -> CharmStateMachine {
         CharmStateMachine {
             map: HashMap::new(),
         }

@@ -1,5 +1,3 @@
-#[cfg(not(feature = "turmoil"))]
-pub use tokio::net::*;
 
 #[cfg(feature = "turmoil")]
 use crate::net::connector::TurmoilTcpStream;

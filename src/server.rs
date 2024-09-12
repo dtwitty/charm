@@ -23,11 +23,11 @@ impl CharmPeer {
         }
     }
 
-    pub fn raft_addr(&self) -> String {
+    #[must_use] pub fn raft_addr(&self) -> String {
         format!("http://{}:{}", self.host, self.raft_port)
     }
 
-    pub fn charm_addr(&self) -> String {
+    #[must_use] pub fn charm_addr(&self) -> String {
         format!("http://{}:{}", self.host, self.charm_port)
     }
 }
@@ -43,7 +43,7 @@ pub async fn run_charm_server(config: CharmServerConfig) {
     assert!(!config.peers.contains(&config.listen), "a node must not be its own peer");
     let rng = CharmRng::new(config.rng_seed);
     let raft_node_id = config.listen.to_node_id();
-    let other_nodes = config.peers.iter().map(|p| p.to_node_id()).collect::<Vec<_>>();
+    let other_nodes = config.peers.iter().map(CharmPeer::to_node_id).collect::<Vec<_>>();
     let raft_config = RaftConfigBuilder::default()
         .node_id(raft_node_id)
         .other_nodes(other_nodes)
@@ -55,5 +55,5 @@ pub async fn run_charm_server(config: CharmServerConfig) {
     let sm = CharmStateMachine::new();
     let raft_handle = run_raft(raft_config, sm, rng.clone());
     run_server(charm_config, raft_handle, rng);
-    pending::<()>().await
+    pending::<()>().await;
 }

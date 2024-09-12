@@ -23,14 +23,14 @@ impl <R: Send + 'static> Clone for RaftCoreHandle<R> {
 }
 
 impl<R: Send + 'static> RaftCoreHandle<R> {
-    pub fn new(node_id: NodeId, tx: UnboundedSender<CoreQueueEntry<R>>) -> Self {
+    #[must_use] pub fn new(node_id: NodeId, tx: UnboundedSender<CoreQueueEntry<R>>) -> Self {
         Self {
             node_id,
             tx,
         }
     }
 
-    pub fn node_id(&self) -> NodeId {
+    #[must_use] pub fn node_id(&self) -> NodeId {
         self.node_id.clone()
     }
 

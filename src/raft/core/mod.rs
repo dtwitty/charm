@@ -142,7 +142,7 @@ pub struct RaftNode<R: Serialize + DeserializeOwned + Send + 'static> {
 }
 
 impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
-    pub fn new(
+    #[must_use] pub fn new(
         config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, mut rng: CharmRng) -> RaftNode<R> {
         let follower_state = FollowerState {
             election_timer: sleep(config.get_election_timeout(&mut rng)).shared(),
@@ -181,7 +181,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
                           }
                      }
 
-                     _ = follower_state.election_timer.clone() => {
+                     () = follower_state.election_timer.clone() => {
                           self.handle_election_timeout();
                      }
                }
@@ -196,7 +196,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
                           }
                      }
 
-                     _ = candidate_state.election_timer.clone() => {
+                     () = candidate_state.election_timer.clone() => {
                           self.handle_election_timeout();
                      }
                }
@@ -211,7 +211,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
                           }
                      }
 
-                     _ = leader_state.heartbeat_timer.clone() => {
+                     () = leader_state.heartbeat_timer.clone() => {
                           self.handle_heartbeat_timeout();
                      }
                }
@@ -573,7 +573,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
             let peer_state = leader_state.get_peer_state(node_id);
             let next_index = peer_state.next_index;
             let prev_log_index = next_index.prev();
-            let prev_log_term = self.log.get(prev_log_index).map(|entry| entry.term).unwrap_or(Term(0));
+            let prev_log_term = self.log.get(prev_log_index).map_or(Term(0), |entry| entry.term);
 
             let entries = self.log.entries_from(next_index);
 

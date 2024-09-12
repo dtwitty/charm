@@ -4,7 +4,7 @@
 pub struct Term(pub u64);
 
 impl Term {
-    pub fn next(self) -> Term {
+    #[must_use] pub fn next(self) -> Term {
         Term(self.0 + 1)
     }
 }
@@ -14,11 +14,11 @@ impl Term {
 pub struct Index(pub u64);
 
 impl Index {
-    pub fn next(self) -> Index {
+    #[must_use] pub fn next(self) -> Index {
         Index(self.0 + 1)
     }
 
-    pub fn prev(self) -> Index {
+    #[must_use] pub fn prev(self) -> Index {
         if self.0 == 0 {
             Index(0)
         } else {
@@ -35,11 +35,11 @@ pub struct NodeId {
 }
 
 impl NodeId {
-    pub fn to_string(&self) -> String {
+    #[must_use] pub fn to_string(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
 
-    pub fn to_addr(&self) -> String {
+    #[must_use] pub fn to_addr(&self) -> String {
         format!("http://{}:{}", self.host, self.port)
     }
 }

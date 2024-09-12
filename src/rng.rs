@@ -14,7 +14,7 @@ impl RngCore for CharmRng {
     }
 
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        self.0.fill_bytes(dest)
+        self.0.fill_bytes(dest);
     }
 
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
@@ -23,7 +23,7 @@ impl RngCore for CharmRng {
 }
 
 impl CharmRng {
-    pub fn new(seed: u64) -> Self {
+    #[must_use] pub fn new(seed: u64) -> Self {
         Self(WyRand::new(seed))
     }
 }

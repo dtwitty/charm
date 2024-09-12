@@ -1,5 +1,5 @@
 use crate::raft::core::handle::RaftCoreHandle;
-use crate::raft::messages::*;
+use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, RequestVoteRequest, RequestVoteResponse};
 use crate::raft::pb::raft_client::RaftClient;
 use crate::raft::types::NodeId;
 use std::collections::HashMap;
@@ -20,7 +20,7 @@ pub struct OutboundNetworkHandle {
 }
 
 impl OutboundNetworkHandle {
-    pub fn new(tx: UnboundedSender<(NodeId, RaftRequest)>) -> Self {
+    #[must_use] pub fn new(tx: UnboundedSender<(NodeId, RaftRequest)>) -> Self {
         Self { tx }
     }
 

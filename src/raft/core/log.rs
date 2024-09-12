@@ -30,7 +30,7 @@ impl Log {
     }
 
     pub fn last_log_term(&self) -> Term {
-        self.entries.last().map(|entry| entry.term).unwrap_or(Term(0))
+        self.entries.last().map_or(Term(0), |entry| entry.term)
     }
 
     pub fn entries_from(&self, index: Index) -> Vec<LogEntry> {

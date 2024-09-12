@@ -44,7 +44,7 @@ impl RetryStrategyBuilder {
 }
 
 impl RetryStrategy {
-    pub fn with_seed(seed: u64) -> Self {
+    #[must_use] pub fn with_seed(seed: u64) -> Self {
         RetryStrategyBuilder::default().rng(CharmRng::new(seed)).build().unwrap()
     }
 
@@ -62,7 +62,7 @@ impl RetryStrategy {
         delay.mul_f64(jitter)
     }
 
-    pub fn clone_rng(&self) -> CharmRng {
+    #[must_use] pub fn clone_rng(&self) -> CharmRng {
         self.rng.clone()
     }
 }
@@ -139,7 +139,7 @@ mod tests {
                 .build()
                 .expect("valid");
             let total_time: Duration = strategy.into_iter().sum();
-            assert!(total_time <= Duration::from_secs(5), "total_time: {:?}", total_time);
+            assert!(total_time <= Duration::from_secs(5), "total_time: {total_time:?}");
         }
     }
 }
