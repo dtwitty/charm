@@ -1,3 +1,5 @@
+#[cfg(feature = "turmoil")]
+
 use charm::charm::client::EasyCharmClient;
 use charm::charm::retry::RetryStrategyBuilder;
 use charm::rng::CharmRng;
@@ -8,7 +10,6 @@ use turmoil::Sim;
 use wyrand::WyRand;
 
 #[test]
-#[cfg(feature = "turmoil")]
 fn test_charm() -> turmoil::Result {
     // Run a bunch of tests with different seeds to try to find a seed that causes a failure.
     for seed in 1..1000 {
@@ -65,7 +66,6 @@ fn test_one(seed: u64) -> turmoil::Result {
     sim.run()
 }
 
-#[cfg(feature = "turmoil")]
 fn run_cluster(sim: &mut Sim, seed_gen: &mut impl RngCore, num_nodes: usize) {
     const RAFT_PORT: u16 = 54321;
     const CHARM_PORT: u16 = 12345;
