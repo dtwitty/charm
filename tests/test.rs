@@ -15,7 +15,7 @@ pub mod tests {
         for seed in 1..1000 {
             let res = test_one(seed);
             if let Err(e) = res {
-                eprintln!("seed {} failed: {:?}", seed, e);
+                eprintln!("seed {seed} failed: {e:?}");
                 return Err(e);
             }
         }
@@ -69,7 +69,7 @@ pub mod tests {
     fn run_cluster(sim: &mut Sim, seed_gen: &mut impl RngCore, num_nodes: usize) {
         const RAFT_PORT: u16 = 54321;
         const CHARM_PORT: u16 = 12345;
-        let host_names = (0..num_nodes).map(|i| format!("host{}", i)).collect::<Vec<_>>();
+        let host_names = (0..num_nodes).map(|i| format!("host{i}")).collect::<Vec<_>>();
 
         for host_name in host_names.clone().iter().cloned() {
             let seed = seed_gen.next_u64();
