@@ -27,6 +27,7 @@ mod log;
 //pub mod node;
 pub mod config;
 pub mod error;
+mod storage;
 
 struct FollowerState {
     /// The timer that will fire when the election timeout is reached.
