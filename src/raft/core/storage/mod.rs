@@ -1,6 +1,6 @@
 mod sqlite_storage;
 
-use crate::raft::types::{Index, LogEntry, Term};
+use crate::raft::types::{Index, LogEntry, NodeId, Term};
 use tonic::async_trait;
 
 #[async_trait]
@@ -33,19 +33,19 @@ pub trait CoreStorage {
     type LogStorage: LogStorage;
 
     /// The error type that this storage engine may return.
-    type ErrorType: std::error::Error;
+    type ErrorType;
 
     /// Get the current term.
     async fn current_term(&self) -> Result<Term, Self::ErrorType>;
 
     /// Set the current term.
-    async fn set_current_term(&mut self, term: Term) -> Result<(), Self::ErrorType>;
+    async fn set_current_term(&self, term: Term) -> Result<(), Self::ErrorType>;
 
     /// Get the ID of the candidate that this node has voted for in the current term.
-    async fn voted_for(&self) -> Result<Option<String>, Self::ErrorType>;
+    async fn voted_for(&self) -> Result<Option<NodeId>, Self::ErrorType>;
 
     /// Set the ID of the candidate that this node has voted for in the current term.
-    async fn set_voted_for(&mut self, candidate_id: Option<String>) -> Result<(), Self::ErrorType>;
+    async fn set_voted_for(&self, candidate_id: Option<NodeId>) -> Result<(), Self::ErrorType>;
 
     /// Get the log storage engine.
     async fn log_storage(&self) -> Self::LogStorage;

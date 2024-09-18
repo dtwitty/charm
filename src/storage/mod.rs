@@ -1,4 +1,4 @@
-mod sqlite_kv;
+pub mod sqlite_kv;
 
 use tonic::async_trait;
 

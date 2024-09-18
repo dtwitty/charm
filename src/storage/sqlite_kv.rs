@@ -4,7 +4,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::SqlitePool;
 use tonic::async_trait;
 
-struct SqliteKv {
+pub struct SqliteKv {
     pool: SqlitePool,
 }
 

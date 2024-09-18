@@ -1,9 +1,10 @@
-use crate::raft::core::storage::LogStorage;
+use crate::raft::core::storage::{CoreStorage, LogStorage};
 use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
 use anyhow::Context;
 use tonic::async_trait;
 
-struct SqliteLogStorage {
+#[derive(Clone)]
+pub struct SqliteLogStorage {
     pool: sqlx::SqlitePool,
 }
 
@@ -122,7 +123,7 @@ impl LogStorage for SqliteLogStorage {
 }
 
 #[cfg(test)]
-mod tests {
+mod log_storage_tests {
     use crate::raft::core::storage::sqlite_storage::SqliteLogStorage;
     use crate::raft::core::storage::LogStorage;
     use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
@@ -168,5 +169,154 @@ mod tests {
         assert_eq!(storage.get(index1).await.unwrap(), None);
         assert_eq!(storage.get(index2).await.unwrap(), None);
         assert_eq!(storage.last_index().await.unwrap(), Index(0));
+    }
+}
+
+pub struct SqliteCoreStorage {
+    pool: sqlx::SqlitePool,
+    log_storage: SqliteLogStorage,
+}
+
+impl SqliteCoreStorage {
+    pub async fn new(state_filename: &str, log_filename: &str) -> anyhow::Result<Self> {
+        let log_storage = SqliteLogStorage::new(log_filename).await?;
+
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(state_filename)
+            .await
+            .context("Failed to create SQLite pool")?;
+
+        // Set up the table.
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS state (
+                current_term INTEGER NOT NULL,
+                voted_for_host TEXT,
+                voted_for_port INTEGER 
+            )
+            "#,
+        )
+            .execute(&pool)
+            .await
+            .context("Failed to create table")?;
+
+        // Check if this is a new or existing database. If new, set initial values.
+        let current_term: Option<i64> = sqlx::query_scalar("SELECT current_term FROM state")
+            .fetch_optional(&pool)
+            .await
+            .context("Failed to check setup")?;
+        let is_set_up = current_term.is_some();
+
+        if !is_set_up {
+            let r = sqlx::query("INSERT INTO state (current_term, voted_for_host, voted_for_port) VALUES (0, NULL, NULL)")
+                .execute(&pool)
+                .await
+                .context("Failed to set initial state")?;
+        }
+
+        Ok(Self { pool, log_storage })
+    }
+}
+
+#[async_trait]
+impl CoreStorage for SqliteCoreStorage {
+    type LogStorage = SqliteLogStorage;
+    type ErrorType = anyhow::Error;
+
+    async fn current_term(&self) -> Result<Term, Self::ErrorType> {
+        sqlx::query_scalar("SELECT current_term FROM state")
+            .fetch_one(&self.pool)
+            .await
+            .map(|term: i64| Term(term as u64))
+            .context("Failed to get current term")
+    }
+
+    async fn set_current_term(&self, term: Term) -> Result<(), Self::ErrorType> {
+        sqlx::query("UPDATE state SET current_term = ?")
+            .bind(term.0 as i64)
+            .execute(&self.pool)
+            .await
+            .context("Failed to set current term")?;
+        Ok(())
+    }
+
+    async fn voted_for(&self) -> Result<Option<NodeId>, Self::ErrorType> {
+        let (host, port): (Option<String>, Option<i64>) =
+            sqlx::query_as("SELECT voted_for_host, voted_for_port FROM state")
+                .fetch_one(&self.pool)
+                .await
+                .context("Failed to get voted for")?;
+
+        if let (Some(host), Some(port)) = (host, port) {
+            Ok(Some(NodeId {
+                host,
+                port: port as u16,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn set_voted_for(&self, candidate_id: Option<NodeId>) -> Result<(), Self::ErrorType> {
+        sqlx::query("UPDATE state SET voted_for_host = ?, voted_for_port = ?")
+            .bind(candidate_id.as_ref().map(|id| &id.host))
+            .bind(candidate_id.as_ref().map(|id| id.port as i64))
+            .execute(&self.pool)
+            .await
+            .context("Failed to set voted for")?;
+        Ok(())
+    }
+
+    async fn log_storage(&self) -> Self::LogStorage {
+        self.log_storage.clone()
+    }
+}
+
+#[cfg(test)]
+mod core_storage_tests {
+    use crate::raft::core::storage::sqlite_storage::SqliteCoreStorage;
+    use crate::raft::core::storage::CoreStorage;
+    use crate::raft::types::{NodeId, Term};
+    use tempfile::NamedTempFile;
+
+    #[tokio::test]
+    async fn test_sqlite_core_storage() {
+        let state_temp_file = NamedTempFile::new().unwrap();
+        let state_filename = state_temp_file.path().to_str().unwrap();
+
+        let log_temp_file = NamedTempFile::new().unwrap();
+        let log_filename = log_temp_file.path().to_str().unwrap();
+
+        // First run
+        {
+            let storage = SqliteCoreStorage::new(state_filename, log_filename).await.unwrap();
+
+            assert_eq!(storage.current_term().await.unwrap(), Term(0));
+            assert_eq!(storage.voted_for().await.unwrap(), None);
+
+            storage.set_current_term(Term(1)).await.unwrap();
+            assert_eq!(storage.current_term().await.unwrap(), Term(1));
+
+            storage.set_voted_for(Some(NodeId {
+                host: "node1".to_string(),
+                port: 1234,
+            })).await.unwrap();
+            assert_eq!(storage.voted_for().await.unwrap(), Some(NodeId {
+                host: "node1".to_string(),
+                port: 1234,
+            }));
+        }
+
+        // Second run
+        {
+            let storage = SqliteCoreStorage::new(state_filename, log_filename).await.unwrap();
+
+            assert_eq!(storage.current_term().await.unwrap(), Term(1));
+            assert_eq!(storage.voted_for().await.unwrap(), Some(NodeId {
+                host: "node1".to_string(),
+                port: 1234,
+            }));
+        }
     }
 }
