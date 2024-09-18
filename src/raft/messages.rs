@@ -48,6 +48,10 @@ impl AppendEntriesRequest {
         let prev_log_term = Term(pb.prev_log_term);
         let entries = pb.entries.iter().map(|e|
             LogEntry {
+                leader_id: NodeId {
+                    host: e.leader_id.clone().unwrap().host,
+                    port: e.leader_id.clone().unwrap().port as u16,
+                },
                 term: Term(e.term),
                 data: Data(e.data.clone()),
             }
@@ -71,6 +75,12 @@ impl AppendEntriesRequest {
         let prev_log_term = self.prev_log_term.0;
         let entries = self.entries.iter().map(|e|
             LogEntryPb {
+                leader_id: Some(
+                    NodeIdPb {
+                        host: e.leader_id.host.clone(),
+                        port: e.leader_id.port.into(),
+                    }
+                ),
                 term: e.term.0,
                 data: e.data.0.clone(),
             }

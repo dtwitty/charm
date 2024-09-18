@@ -56,10 +56,10 @@ pub mod tests {
             let client = EasyCharmClient::new("http://host0:12345".to_string(), retry_strategy)?;
             client.put("hello".to_string(), "world".to_string()).await?;
             let value = client.get("hello".to_string()).await?;
-            assert_eq!(value, Some("world".to_string()));
+            assert_eq!(value.value, Some("world".to_string()));
             client.delete("hello".to_string()).await?;
             let value = client.get("hello".to_string()).await?;
-            assert_eq!(value, None);
+            assert_eq!(value.value, None);
             Ok(())
         });
 

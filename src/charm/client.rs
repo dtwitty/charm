@@ -1,5 +1,5 @@
 use crate::charm::pb::charm_client::CharmClient;
-use crate::charm::pb::{DeleteRequest, GetRequest, PutRequest};
+use crate::charm::pb::{DeleteRequest, DeleteResponse, GetRequest, GetResponse, PutRequest, PutResponse};
 use crate::charm::retry::{RetryStrategy, RetryStrategyBuilder, RetryStrategyIterator};
 use failsafe::failure_policy::{success_rate_over_time_window, SuccessRateOverTimeWindow};
 use failsafe::{Config, Instrument, StateMachine};
@@ -62,7 +62,7 @@ impl EasyCharmClient {
 
 
     #[instrument(fields(addr=self.addr.clone()), skip_all)]
-    pub async fn get(&self, key: String) -> anyhow::Result<Option<String>> {
+    pub async fn get(&self, key: String) -> anyhow::Result<GetResponse> {
         debug!("Getting key: {}", key);
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
@@ -71,12 +71,12 @@ impl EasyCharmClient {
             request.set_timeout(Duration::from_secs(1));
             let result = self.client.clone().get(request).await;
             let response = self.instrument_response(result)?;
-            Ok(response.value)
+            Ok(response)
         }).await
     }
 
     #[instrument(fields(addr=self.addr.clone()), skip_all)]
-    pub async fn put(&self, key: String, value: String) -> anyhow::Result<()> {
+    pub async fn put(&self, key: String, value: String) -> anyhow::Result<PutResponse> {
         debug!("Putting key: {} value: {}", key, value);
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
@@ -84,13 +84,13 @@ impl EasyCharmClient {
             let mut request = tonic::Request::new(PutRequest { key: key.clone(), value: value.clone() });
             request.set_timeout(Duration::from_secs(1));
             let result = self.client.clone().put(request).await;
-            self.instrument_response(result)?;
-            Ok(())
+            let response = self.instrument_response(result)?;
+            Ok(response)
         }).await
     }
 
     #[instrument(fields(addr=self.addr.clone()), skip_all)]
-    pub async fn delete(&self, key: String) -> anyhow::Result<()> {
+    pub async fn delete(&self, key: String) -> anyhow::Result<DeleteResponse> {
         debug!("Deleting key: {}", key);
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
@@ -98,8 +98,8 @@ impl EasyCharmClient {
             let mut request = tonic::Request::new(DeleteRequest { key: key.clone() });
             request.set_timeout(Duration::from_secs(1));
             let result = self.client.clone().delete(request).await;
-            self.instrument_response(result)?;
-            Ok(())
+            let response = self.instrument_response(result)?;
+            Ok(response)
         }).await
     }
 

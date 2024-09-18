@@ -1,5 +1,5 @@
 use crate::raft::core::storage::LogStorage;
-use crate::raft::types::{Data, Index, LogEntry, Term};
+use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
 use anyhow::Context;
 use tonic::async_trait;
 
@@ -19,6 +19,8 @@ impl SqliteLogStorage {
             r#"
             CREATE TABLE IF NOT EXISTS log (
                 id INTEGER PRIMARY KEY,
+                leader_host TEXT NOT NULL,
+                leader_port INTEGER NOT NULL,
                 term INTEGER NOT NULL,
                 data BLOB NOT NULL
             )
@@ -38,7 +40,9 @@ impl LogStorage for SqliteLogStorage {
 
     async fn append(&mut self, entry: LogEntry) -> Result<Index, Self::ErrorType> {
         let mut tx = self.pool.begin().await.context("Failed to start transaction")?;
-        sqlx::query("INSERT INTO log (term, data) VALUES (?, ?)")
+        sqlx::query("INSERT INTO log (leader_host, leader_port, term, data) VALUES (?, ?, ?, ?)")
+            .bind(entry.leader_id.host)
+            .bind(entry.leader_id.port as i64)
             .bind(entry.term.0 as i64)
             .bind(entry.data.0)
             .execute(&mut *tx)
@@ -56,13 +60,17 @@ impl LogStorage for SqliteLogStorage {
     }
 
     async fn get(&self, index: Index) -> Result<Option<LogEntry>, Self::ErrorType> {
-        let entry = sqlx::query_as::<_, (i64, Vec<u8>)>("SELECT term, data FROM log WHERE id = ?")
+        let entry = sqlx::query_as::<_, (String, i64, i64, Vec<u8>)>("SELECT leader_host, leader_port, term, data FROM log WHERE id = ?")
             .bind(index.0 as i64)
             .fetch_optional(&self.pool)
             .await
             .context("Failed to fetch entry")?;
 
-        Ok(entry.map(|(term, data)| LogEntry {
+        Ok(entry.map(|(leader_host, leader_port, term, data)| LogEntry {
+            leader_id: NodeId {
+                host: leader_host,
+                port: leader_port as u16,
+            },
             term: Term(term as u64),
             data: Data(data),
         }))
@@ -85,12 +93,16 @@ impl LogStorage for SqliteLogStorage {
     }
 
     async fn entries_from(&self, index: Index) -> Result<Vec<LogEntry>, Self::ErrorType> {
-        sqlx::query_as::<_, (i64, Vec<u8>)>("SELECT term, data FROM log WHERE id >= ?")
+        sqlx::query_as::<_, (String, i64, i64, Vec<u8>)>("SELECT leader_host, leader_port, term, data FROM log WHERE id >= ?")
             .bind(index.0 as i64)
             .fetch_all(&self.pool)
             .await
             .map(|entries| {
-                entries.into_iter().map(|(term, data)| LogEntry {
+                entries.into_iter().map(|(leader_host, leader_port, term, data)| LogEntry {
+                    leader_id: NodeId {
+                        host: leader_host,
+                        port: leader_port as u16,
+                    },
                     term: Term(term as u64),
                     data: Data(data),
                 }).collect()
@@ -111,10 +123,9 @@ impl LogStorage for SqliteLogStorage {
 
 #[cfg(test)]
 mod tests {
-    use crate::raft::core::storage::LogStorage;
-    use crate::raft::types::{Data, Index, LogEntry, Term};
     use crate::raft::core::storage::sqlite_storage::SqliteLogStorage;
-    use std::path::PathBuf;
+    use crate::raft::core::storage::LogStorage;
+    use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
     use tempfile::NamedTempFile;
 
     #[tokio::test]
@@ -125,10 +136,18 @@ mod tests {
         let mut storage = SqliteLogStorage::new(filename).await.unwrap();
 
         let entry1 = LogEntry {
+            leader_id: NodeId {
+                host: "node1".to_string(),
+                port: 1234,
+            },
             term: Term(1),
             data: Data(b"hello".to_vec()),
         };
         let entry2 = LogEntry {
+            leader_id: NodeId {
+                host: "node2".to_string(),
+                port: 5678,
+            },
             term: Term(1),
             data: Data(b"world".to_vec()),
         };

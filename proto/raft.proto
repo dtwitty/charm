@@ -7,6 +7,7 @@ message NodeIdPb {
 }
 
 message LogEntryPb {
+  NodeIdPb leader_id = 1;
   uint64 term = 2;
   bytes data = 3;
 }

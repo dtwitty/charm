@@ -1,4 +1,5 @@
 use crate::raft;
+use crate::raft::types::RaftInfo;
 use crate::tracing_util::SpanOption;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -24,12 +25,29 @@ impl CharmStateMachine {
     }
 }
 
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetResponse {
+    pub value: Option<String>,
+    pub raft_info: RaftInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SetResponse {
+    pub raft_info: RaftInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteResponse {
+    pub raft_info: RaftInfo,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum CharmStateMachineRequest {
     Get {
         key: String,
         #[serde(skip)]
-        response: Option<oneshot::Sender<Option<String>>>,
+        response: Option<oneshot::Sender<GetResponse>>,
         #[serde(skip)]
         span: Option<Span>
     },
@@ -37,14 +55,14 @@ pub enum CharmStateMachineRequest {
         key: String,
         value: String,
         #[serde(skip)]
-        response: Option<oneshot::Sender<()>>,
+        response: Option<oneshot::Sender<SetResponse>>,
         #[serde(skip)]
         span: Option<Span>
     },
     Delete {
         key: String,
         #[serde(skip)]
-        response: Option<oneshot::Sender<()>>,
+        response: Option<oneshot::Sender<DeleteResponse>>,
         #[serde(skip)]
         span: Option<Span>
     },
@@ -54,7 +72,7 @@ pub enum CharmStateMachineRequest {
 impl raft::state_machine::StateMachine for CharmStateMachine {
     type Request = CharmStateMachineRequest;
 
-    async fn apply(&mut self, request: Self::Request) {
+    async fn apply(&mut self, request: Self::Request, raft_info: RaftInfo) {
         match request {
             CharmStateMachineRequest::Get { key, response, span } => {
                 let value = self.map.get(&key).cloned();
@@ -62,7 +80,7 @@ impl raft::state_machine::StateMachine for CharmStateMachine {
                     tracing::debug!("Get `{:?}` returns `{:?}`", key, value);
                 });
                 if let Some(tx) = response {
-                    tx.send(value).unwrap();
+                    tx.send(GetResponse { value, raft_info }).unwrap();
                 }
             }
             CharmStateMachineRequest::Set { key, value, response, span } => {
@@ -71,7 +89,7 @@ impl raft::state_machine::StateMachine for CharmStateMachine {
                 });
                 self.map.insert(key, value);
                 if let Some(tx) = response {
-                    tx.send(()).unwrap();
+                    tx.send(SetResponse { raft_info }).unwrap();
                 }
             }
             CharmStateMachineRequest::Delete { key, response, span } => {
@@ -80,7 +98,7 @@ impl raft::state_machine::StateMachine for CharmStateMachine {
                 });
                 self.map.remove(&key);
                 if let Some(tx) = response {
-                    tx.send(()).unwrap();
+                    tx.send(DeleteResponse { raft_info }).unwrap();
                 }
             }
         }

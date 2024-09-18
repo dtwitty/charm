@@ -1,12 +1,19 @@
 syntax = "proto3";
 package charmpb;
 
+message ResponseHeader {
+  string leader_id = 1;
+  uint64 raft_term = 2;
+  uint64 raft_index = 3;
+}
+
 message GetRequest {
   string key = 1;
 }
 
 message GetResponse {
-  optional string value = 1;
+  ResponseHeader response_header = 1;
+  optional string value = 2;
 }
 
 message PutRequest {
@@ -15,6 +22,7 @@ message PutRequest {
 }
 
 message PutResponse {
+  ResponseHeader response_header = 1;
 }
 
 message DeleteRequest {
@@ -22,6 +30,7 @@ message DeleteRequest {
 }
 
 message DeleteResponse {
+  ResponseHeader response_header = 1;
 }
 
 service Charm {

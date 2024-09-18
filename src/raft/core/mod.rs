@@ -4,7 +4,7 @@ use crate::raft::core::Role::{Candidate, Follower, Leader};
 use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, RequestVoteRequest, RequestVoteResponse};
 use crate::raft::network::outbound_network::OutboundNetworkHandle;
 use crate::raft::state_machine::StateMachineHandle;
-use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
+use crate::raft::types::{Data, Index, LogEntry, NodeId, RaftInfo, Term};
 use crate::rng::CharmRng;
 use config::RaftConfig;
 use futures::future::Shared;
@@ -406,9 +406,14 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
                     swap(&mut self.proposals, &mut to_complete);
 
                     // Complete the futures, and send them to the state machine.
-                    for (_, proposal) in to_complete {
+                    for (idx, proposal) in to_complete {
                         proposal.commit_tx.send(Ok(())).unwrap();
-                        self.state_machine.apply(proposal.req);
+                        let raft_info = RaftInfo {
+                            node_id: self.node_id().clone(),
+                            term: self.current_term,
+                            index: idx,
+                        };
+                        self.state_machine.apply(proposal.req, raft_info);
                     }
                 }
             } else {
@@ -534,7 +539,11 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
 
             Leader(_) => {
                 let serialized = serde_json::to_vec(&request).unwrap();
-                let log_entry = LogEntry { term: self.current_term, data: Data(serialized) };
+                let log_entry = LogEntry {
+                    leader_id: self.node_id().clone(),
+                    term: self.current_term,
+                    data: Data(serialized),
+                };
                 let index = self.log.append(log_entry);
                 debug!("Proposal appended to log at index {:?}.", index);
                 self.proposals.insert(index, Proposal { req: request, commit_tx });
@@ -627,7 +636,12 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
             self.last_applied = self.last_applied.next();
             let entry = self.log.get(self.last_applied).expect("entry not found");
             let req: R = serde_json::from_slice(&entry.data.0).expect("deserialization failed");
-            self.state_machine.apply(req);
+            let raft_info = RaftInfo {
+                node_id: entry.leader_id.clone(),
+                term: entry.term.clone(),
+                index: self.last_applied.clone(),
+            };
+            self.state_machine.apply(req, raft_info);
         }
     }
 

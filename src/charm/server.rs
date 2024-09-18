@@ -70,8 +70,11 @@ impl Charm for CharmServerImpl {
         match commit {
             Ok(()) => {
                 // Great success!
-                let value = rx.await.unwrap();
-                Ok(Response::new(GetResponse { value }))
+                let response = rx.await.unwrap();
+                let value = response.value;
+                let raft_info = response.raft_info;
+                let response_header = Some(raft_info.into());
+                Ok(Response::new(GetResponse { response_header, value }))
             }
 
             Err(NotLeader { leader_id: Some(leader) }) => {
@@ -79,7 +82,7 @@ impl Charm for CharmServerImpl {
                 let client = self.get_client(leader.clone()).map_err(|e| Status::internal(e.to_string()))?;
                 // Forward the request to the leader.
                 let response = client.get(key).await.map_err(|e| Status::internal(e.to_string()))?;
-                Ok(Response::new(GetResponse { value: response }))
+                Ok(Response::new(response))
             }
 
             Err(NotLeader { leader_id: None }) => {
@@ -102,16 +105,18 @@ impl Charm for CharmServerImpl {
         match commit {
             Ok(()) => {
                 // Great success!
-                rx.await.unwrap();
-                Ok(Response::new(PutResponse {}))
+                let response = rx.await.unwrap();
+                let raft_info = response.raft_info;
+                let response_header = Some(raft_info.into());
+                Ok(Response::new(PutResponse { response_header }))
             }
 
             Err(NotLeader { leader_id: Some(leader) }) => {
                 debug!("Not the leader, forwarding to `{:?}`", leader);
                 let client = self.get_client(leader.clone()).map_err(|e| Status::internal(e.to_string()))?;
                 // Forward the request to the leader.
-                client.put(key, value).await.map_err(|e| Status::internal(e.to_string()))?;
-                Ok(Response::new(PutResponse {}))
+                let response = client.put(key, value).await.map_err(|e| Status::internal(e.to_string()))?;
+                Ok(Response::new(response))
             }
 
             Err(NotLeader { leader_id: None }) => {
@@ -133,16 +138,18 @@ impl Charm for CharmServerImpl {
         match commit {
             Ok(()) => {
                 // Great success!
-                rx.await.unwrap();
-                Ok(Response::new(DeleteResponse {}))
+                let repsonse = rx.await.unwrap();
+                let raft_info = repsonse.raft_info;
+                let response_header = Some(raft_info.into());
+                Ok(Response::new(DeleteResponse { response_header }))
             }
 
             Err(NotLeader { leader_id: Some(leader) }) => {
                 debug!("Not the leader, forwarding to `{:?}`", leader);
                 let client = self.get_client(leader.clone()).map_err(|e| Status::internal(e.to_string()))?;
                 // Forward the request to the leader.
-                client.delete(key).await.map_err(|e| Status::internal(e.to_string()))?;
-                Ok(Response::new(DeleteResponse {}))
+                let response = client.delete(key).await.map_err(|e| Status::internal(e.to_string()))?;
+                Ok(Response::new(response))
             }
 
             Err(NotLeader { leader_id: None }) => {
