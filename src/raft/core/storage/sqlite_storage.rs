@@ -268,7 +268,7 @@ impl CoreStorage for SqliteCoreStorage {
         Ok(())
     }
 
-    async fn log_storage(&self) -> Self::LogStorage {
+    fn log_storage(&self) -> Self::LogStorage {
         self.log_storage.clone()
     }
 }

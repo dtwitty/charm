@@ -13,7 +13,7 @@ pub trait LogStorage {
 
     /// Get the entry at the given index, if it exists.
     async fn get(&self, index: Index) -> Result<Option<LogEntry>, Self::ErrorType>;
-
+    
     /// Get the index of the last entry in the log.
     async fn last_index(&self) -> Result<Index, Self::ErrorType>;
 
@@ -48,6 +48,6 @@ pub trait CoreStorage {
     async fn set_voted_for(&self, candidate_id: Option<NodeId>) -> Result<(), Self::ErrorType>;
 
     /// Get the log storage engine.
-    async fn log_storage(&self) -> Self::LogStorage;
+    fn log_storage(&self) -> Self::LogStorage;
 }
 

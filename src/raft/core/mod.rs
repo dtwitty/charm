@@ -1,11 +1,13 @@
 use crate::raft::core::error::RaftCoreError;
 use crate::raft::core::queue::CoreQueueEntry;
+use crate::raft::core::storage::{CoreStorage, LogStorage};
 use crate::raft::core::Role::{Candidate, Follower, Leader};
 use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, RequestVoteRequest, RequestVoteResponse};
 use crate::raft::network::outbound_network::OutboundNetworkHandle;
 use crate::raft::state_machine::StateMachineHandle;
 use crate::raft::types::{Data, Index, LogEntry, NodeId, RaftInfo, Term};
 use crate::rng::CharmRng;
+use anyhow::Context;
 use config::RaftConfig;
 use futures::future::Shared;
 use futures::FutureExt;
@@ -111,17 +113,11 @@ struct Proposal<R> {
     commit_tx: oneshot::Sender<Result<(), RaftCoreError>>,
 }
 
-pub struct RaftNode<R: Serialize + DeserializeOwned + Send + 'static> {
+pub struct RaftNode<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> {
     config: RaftConfig,
 
-    /// The current term of the node.
-    current_term: Term,
-
-    /// The ID of the node that this node voted for in the current term.
-    voted_for: Option<NodeId>,
-
     /// The log of entries that this node has received.
-    log: Log,
+    storage: S,
 
     /// The index of the highest log entry known to be committed.
     /// Initialized to 0, increases monotonically.
@@ -142,7 +138,7 @@ pub struct RaftNode<R: Serialize + DeserializeOwned + Send + 'static> {
     rng: CharmRng,
 }
 
-impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
+impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<R, S> {
     #[must_use] pub fn new(
         config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, mut rng: CharmRng) -> RaftNode<R> {
         let follower_state = FollowerState {
@@ -153,9 +149,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
 
         let mut node = RaftNode {
             config,
-            current_term: Term(0),
-            voted_for: None,
-            log: Log::new(),
+            storage,
             commit_index: Index(0),
             last_applied: Index(0),
             role: Follower(follower_state),
@@ -668,6 +662,26 @@ impl<R: Serialize + DeserializeOwned + Send + 'static> RaftNode<R> {
 
     fn node_id(&self) -> &NodeId {
         &self.config.node_id
+    }
+
+    async fn get_current_term(&self) -> Term {
+        self.storage.current_term().await.expect("failed to get current term")
+    }
+
+    async fn set_current_term(&self, term: Term) {
+        self.storage.set_current_term(term).await.expect("failed to set current term")
+    }
+
+    async fn get_voted_for(&self) -> Option<NodeId> {
+        self.storage.voted_for().await.expect("failed to get voted for")
+    }
+
+    async fn set_voted_for(&self, candidate_id: Option<NodeId>) {
+        self.storage.set_voted_for(candidate_id).await.expect("failed to set voted for")
+    }
+
+    async fn get_log_storage(&self) -> S::LogStorage {
+        self.storage.log_storage()
     }
 }
 
