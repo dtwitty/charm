@@ -209,7 +209,7 @@ impl SqliteCoreStorage {
         let is_set_up = current_term.is_some();
 
         if !is_set_up {
-            let r = sqlx::query("INSERT INTO state (current_term, voted_for_host, voted_for_port) VALUES (0, NULL, NULL)")
+            sqlx::query("INSERT INTO state (current_term, voted_for_host, voted_for_port) VALUES (0, NULL, NULL)")
                 .execute(&pool)
                 .await
                 .context("Failed to set initial state")?;

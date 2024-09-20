@@ -1,19 +1,20 @@
-mod sqlite_storage;
+pub mod sqlite_storage;
 
+use std::fmt::Debug;
 use crate::raft::types::{Index, LogEntry, NodeId, Term};
 use tonic::async_trait;
 
 #[async_trait]
 pub trait LogStorage {
     /// The error type that this storage engine may return.
-    type ErrorType;
+    type ErrorType: Debug;
 
     /// Append a new entry to the log, returning the index at which it was appended.
     async fn append(&mut self, entry: LogEntry) -> Result<Index, Self::ErrorType>;
 
     /// Get the entry at the given index, if it exists.
     async fn get(&self, index: Index) -> Result<Option<LogEntry>, Self::ErrorType>;
-    
+
     /// Get the index of the last entry in the log.
     async fn last_index(&self) -> Result<Index, Self::ErrorType>;
 
@@ -33,7 +34,7 @@ pub trait CoreStorage {
     type LogStorage: LogStorage;
 
     /// The error type that this storage engine may return.
-    type ErrorType;
+    type ErrorType: Debug;
 
     /// Get the current term.
     async fn current_term(&self) -> Result<Term, Self::ErrorType>;

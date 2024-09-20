@@ -53,7 +53,7 @@ pub async fn run_charm_server(config: CharmServerConfig) {
         peers: config.peers.clone(),
     };
     let sm = CharmStateMachine::new();
-    let raft_handle = run_raft(raft_config, sm, rng.clone());
+    let raft_handle = run_raft(raft_config, sm, rng.clone()).await;
     run_server(charm_config, raft_handle, rng);
     pending::<()>().await;
 }

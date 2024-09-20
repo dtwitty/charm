@@ -9,6 +9,8 @@ use rand::Rng;
 pub struct RaftConfig {
     pub node_id: NodeId,
     pub other_nodes: Vec<NodeId>,
+    pub raft_storage_filename: String,
+    pub raft_log_storage_filename: String,
 
     #[builder(default = "Duration::from_millis(150)")]
     pub election_timeout_min: Duration,
