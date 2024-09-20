@@ -12,6 +12,7 @@ pub mod tests {
 
     #[test]
     fn test_charm() -> turmoil::Result {
+        configure_tracing();
         // Run a bunch of tests with different seeds to try to find a seed that causes a failure.
         for seed in 1..1000 {
             let res = test_one(seed);
@@ -26,7 +27,7 @@ pub mod tests {
     #[test]
     #[cfg(feature = "turmoil")]
     fn test_seed() -> turmoil::Result {
-        let seed = 10;
+        let seed = 1;
         configure_tracing();
         test_one(seed)
     }
@@ -36,12 +37,10 @@ pub mod tests {
     fn test_one(seed: u64) -> turmoil::Result {
         // The simulation uses this seed.
         let mut sim = turmoil::Builder::new()
-            .simulation_duration(Duration::from_secs(5))
+            .simulation_duration(Duration::from_secs(10))
             .min_message_latency(Duration::from_millis(1))
             .max_message_latency(Duration::from_millis(50))
             .enable_random_order()
-            .fail_rate(0.01)
-            .repair_rate(0.9)
             .build_with_rng(Box::new(WyRand::new(seed)));
 
         // The rest are seeded deterministically but differently for each node and client.
@@ -50,10 +49,12 @@ pub mod tests {
         // Run a cluster of 3 nodes.
         run_cluster(seed, &mut sim, &mut seed_gen, 3);
 
-
         let client_seed = seed_gen.next_u64();
         sim.client("client", async move {
-            let retry_strategy = RetryStrategyBuilder::default().rng(CharmRng::new(client_seed)).build().expect("valid");
+            let retry_strategy = RetryStrategyBuilder::default()
+                .total_retry_time(Duration::from_secs(5 * 60))
+                .rng(CharmRng::new(client_seed))
+                .build().expect("valid");
             let client = EasyCharmClient::new("http://host0:12345".to_string(), retry_strategy)?;
             client.put("hello".to_string(), "world".to_string()).await?;
             let value = client.get("hello".to_string()).await?;

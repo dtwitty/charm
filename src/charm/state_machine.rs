@@ -80,7 +80,10 @@ impl raft::state_machine::StateMachine for CharmStateMachine {
                     tracing::debug!("Get `{:?}` returns `{:?}`", key, value);
                 });
                 if let Some(tx) = response {
-                    tx.send(GetResponse { value, raft_info }).unwrap();
+                    let r = tx.send(GetResponse { value, raft_info });
+                    if r.is_err() {
+                        tracing::warn!("Failed to send response from Get request. The receiver has been dropped.");
+                    }
                 }
             }
             CharmStateMachineRequest::Set { key, value, response, span } => {
@@ -89,7 +92,10 @@ impl raft::state_machine::StateMachine for CharmStateMachine {
                 });
                 self.map.insert(key, value);
                 if let Some(tx) = response {
-                    tx.send(SetResponse { raft_info }).unwrap();
+                    let r = tx.send(SetResponse { raft_info });
+                    if r.is_err() {
+                        tracing::warn!("Failed to send response from Set request. The receiver has been dropped.");
+                    }
                 }
             }
             CharmStateMachineRequest::Delete { key, response, span } => {
@@ -98,7 +104,10 @@ impl raft::state_machine::StateMachine for CharmStateMachine {
                 });
                 self.map.remove(&key);
                 if let Some(tx) = response {
-                    tx.send(DeleteResponse { raft_info }).unwrap();
+                    let r = tx.send(DeleteResponse { raft_info });
+                    if r.is_err() {
+                        tracing::warn!("Failed to send response from Delete request. The receiver has been dropped.");
+                    }
                 }
             }
         }

@@ -18,7 +18,7 @@ pub struct RaftConfig {
     #[builder(default = "Duration::from_millis(300)")]
     pub election_timeout_max: Duration,
 
-    #[builder(default = "Duration::from_millis(100)")]
+    #[builder(default = "Duration::from_millis(50)")]
     pub heartbeat_interval: Duration,
 }
 

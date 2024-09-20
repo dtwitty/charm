@@ -21,26 +21,13 @@ pub struct RetryStrategy {
     #[builder(default = "2.0")]
     factor: f64,
 
-    /// The minimum amount of jitter to add to the delay.
-    /// The actual jitter will be a random value between `jitter_min` and `jitter_max`.
-    #[builder(default = "0.8")]
-    jitter_min: f64,
-
-    /// The maximum amount of jitter to add to the delay.
-    /// The actual jitter will be a random value between `jitter_min` and `jitter_max`.
-    #[builder(default = "1.2")]
-    jitter_max: f64,
+    /// Whether to apply jitter.
+    #[builder(default = "true")]
+    enable_jitter: bool,
 
     /// The random number generator to use for jitter.
     /// We need to pass one in for deterministic tests.
     rng: CharmRng
-}
-
-impl RetryStrategyBuilder {
-    #[allow(dead_code)]
-    pub fn no_jitter(&mut self) -> &mut Self {
-        self.jitter_min(1.0).jitter_max(1.0)
-    }
 }
 
 impl RetryStrategy {
@@ -52,13 +39,14 @@ impl RetryStrategy {
         assert!(self.initial_delay >= Duration::from_secs(0));
         assert!(self.total_retry_time >= Duration::from_secs(0));
         assert!(self.factor >= 1.0);
-        assert!(self.jitter_min >= 0.0);
-        assert!(self.jitter_max >= self.jitter_min);
     }
 
     fn apply_jitter(&mut self, delay: Duration) -> Duration {
-        let range = self.jitter_max - self.jitter_min;
-        let jitter = self.rng.gen::<f64>() * range + self.jitter_min;
+        if !self.enable_jitter {
+            return delay;
+        }
+        
+        let jitter = self.rng.gen::<f64>();
         delay.mul_f64(jitter)
     }
 
@@ -118,7 +106,7 @@ mod tests {
 
     #[test]
     fn test_retry_strategy() {
-        let strategy = RetryStrategyBuilder::default().rng(CharmRng::new(0)).no_jitter().build().expect("valid");
+        let strategy = RetryStrategyBuilder::default().rng(CharmRng::new(0)).enable_jitter(false).build().expect("valid");
         let mut iter = strategy.into_iter();
         assert_eq!(iter.next(), Some(Duration::from_millis(100)));
         assert_eq!(iter.next(), Some(Duration::from_millis(200)));

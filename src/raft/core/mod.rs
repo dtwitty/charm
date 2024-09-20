@@ -420,13 +420,17 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
 
                     // Complete the futures, and send them to the state machine.
                     for (idx, proposal) in to_complete {
-                        proposal.commit_tx.send(Ok(())).unwrap();
-                        let raft_info = RaftInfo {
-                            node_id: self.node_id().clone(),
-                            term: current_term,
-                            index: idx,
-                        };
-                        self.state_machine.apply(proposal.req, raft_info);
+                        let send_commit = proposal.commit_tx.send(Ok(()));
+                        if send_commit.is_err() {
+                            warn!("Failed to send commit notification. Client request may already be gone.");
+                        } else {
+                            let raft_info = RaftInfo {
+                                node_id: self.node_id().clone(),
+                                term: current_term,
+                                index: idx,
+                            };
+                            self.state_machine.apply(proposal.req, raft_info);
+                        }
                     }
                 }
             } else {
