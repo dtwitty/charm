@@ -2,6 +2,7 @@ pub mod sqlite_kv;
 
 use tonic::async_trait;
 
+#[allow(dead_code)]
 #[async_trait]
 pub trait KvStore {
     type ErrorType;

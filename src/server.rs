@@ -37,6 +37,8 @@ pub struct CharmServerConfig {
     listen: CharmPeer,
     peers: Vec<CharmPeer>,
     rng_seed: u64,
+    raft_storage_filename: String,
+    raft_log_storage_filename: String,
 }
 
 pub async fn run_charm_server(config: CharmServerConfig) {
@@ -47,6 +49,8 @@ pub async fn run_charm_server(config: CharmServerConfig) {
     let raft_config = RaftConfigBuilder::default()
         .node_id(raft_node_id)
         .other_nodes(other_nodes)
+        .raft_log_storage_filename(config.raft_log_storage_filename)
+        .raft_storage_filename(config.raft_storage_filename)
         .build().unwrap();
     let charm_config = CharmConfig {
         listen: config.listen,

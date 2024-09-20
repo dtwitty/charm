@@ -8,6 +8,7 @@ pub struct SqliteKv {
     pool: SqlitePool,
 }
 
+#[allow(dead_code)]
 impl SqliteKv {
     pub async fn new(filename: &str) -> anyhow::Result<Self> {
         // Get a Sqlite Connection.

@@ -45,7 +45,7 @@ impl<R: Send + 'static> RaftHandle<R> {
 
 pub async fn run_raft<S: StateMachine>(config: RaftConfig, state_machine: S, rng: CharmRng) -> RaftHandle<S::Request>
 where
-    S::Request: Serialize + DeserializeOwned + Send + 'static,
+    S::Request: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     let storage = SqliteCoreStorage::new(&config.raft_storage_filename, &config.raft_log_storage_filename).await.unwrap(); 
     let (to_core_tx, to_core_rx) = unbounded_channel();

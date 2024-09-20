@@ -5,6 +5,7 @@ pub mod tests {
     use charm::rng::CharmRng;
     use charm::server::{run_charm_server, CharmPeer, CharmServerConfigBuilder};
     use rand::RngCore;
+    use std::fs::{create_dir, remove_dir_all};
     use std::time::Duration;
     use turmoil::Sim;
     use wyrand::WyRand;
@@ -47,7 +48,7 @@ pub mod tests {
         let mut seed_gen = WyRand::new(seed);
 
         // Run a cluster of 3 nodes.
-        run_cluster(&mut sim, &mut seed_gen, 3);
+        run_cluster(seed, &mut sim, &mut seed_gen, 3);
 
 
         let client_seed = seed_gen.next_u64();
@@ -66,7 +67,11 @@ pub mod tests {
         sim.run()
     }
 
-    fn run_cluster(sim: &mut Sim, seed_gen: &mut impl RngCore, num_nodes: usize) {
+    fn run_cluster(test_seed: u64, sim: &mut Sim, seed_gen: &mut impl RngCore, num_nodes: usize) {
+        // Set up the environment for the test.
+        remove_dir_all(format!("test_data/{}", test_seed)).ok();
+        create_dir(format!("test_data/{}", test_seed)).unwrap();
+        
         const RAFT_PORT: u16 = 54321;
         const CHARM_PORT: u16 = 12345;
         let host_names = (0..num_nodes).map(|i| format!("host{i}")).collect::<Vec<_>>();
@@ -74,6 +79,8 @@ pub mod tests {
         for host_name in host_names.clone().iter().cloned() {
             let seed = seed_gen.next_u64();
             let host_names = host_names.clone();
+            let raft_storage_filename = format!("test_data/{}/raft_storage_{}.sqlite", test_seed, host_name);
+            let raft_log_storage_filename = format!("test_data/{}/raft_log_storage_{}.sqlite", test_seed, host_name);
             sim.host(host_name.to_string(), move ||
                 {
                     let host_names = host_names.clone();
@@ -93,6 +100,8 @@ pub mod tests {
                                     raft_port: RAFT_PORT,
                                 })
                                 .collect())
+                        .raft_log_storage_filename(raft_log_storage_filename.clone())
+                        .raft_storage_filename(raft_storage_filename.clone())
                         .build().unwrap();
                     async move {
                         run_charm_server(charm_server_config).await;

@@ -23,7 +23,6 @@ use tracing::{debug, error, info, trace, warn, Instrument, Span};
 
 pub mod handle;
 mod queue;
-mod log;
 //pub mod node;
 pub mod config;
 pub mod error;
@@ -175,12 +174,12 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
                 select! {
                      cqe = self.core_rx.recv() => {
                           if let Some(cqe) = cqe {
-                            self.handle_event(cqe);
+                            self.handle_event(cqe).await;
                           }
                      }
 
                      () = follower_state.election_timer.clone() => {
-                          self.handle_election_timeout();
+                          self.handle_election_timeout().await;
                      }
                }
             }
@@ -190,12 +189,12 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
                 select! {
                      cqe = self.core_rx.recv() => {
                           if let Some(cqe) = cqe {
-                            self.handle_event(cqe);
+                            self.handle_event(cqe).await;
                           }
                      }
 
                      () = candidate_state.election_timer.clone() => {
-                          self.handle_election_timeout();
+                          self.handle_election_timeout().await;
                      }
                }
             }
@@ -205,12 +204,12 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
                 select! {
                      cqe = self.core_rx.recv() => {
                           if let Some(cqe) = cqe {
-                            self.handle_event(cqe);
+                            self.handle_event(cqe).await;
                           }
                      }
 
                      () = leader_state.heartbeat_timer.clone() => {
-                          self.handle_heartbeat_timeout();
+                          self.handle_heartbeat_timeout().await;
                      }
                }
             }
@@ -318,7 +317,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
             }
             self.commit_index = req.leader_commit.min(last_index);
             self.update_leader(req.leader_id.clone());
-            self.apply_committed();
+            self.apply_committed().await;
             return self.append_entries_response(true).await;
         }
 
@@ -348,7 +347,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
 
         debug!("Sending successful response.");
         self.update_leader(req.leader_id.clone());
-        self.apply_committed();
+        self.apply_committed().await;
         self.append_entries_response(true).await
     }
 
@@ -522,7 +521,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
                     debug!("Vote granted by {:?}. We now have {:?} out of {:?} needed votes", res.node_id, state.votes_received, majority);
                     if state.votes_received > majority as u64 && !self.role.is_leader() {
                         // Great success!
-                        self.become_leader();
+                        self.become_leader().await;
                     }
                 } else {
                     // The vote was not granted, just log it.
@@ -714,7 +713,12 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
 }
 
 #[tracing::instrument(skip_all)]
-async fn run<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage + Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, storage: S, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, rng: CharmRng, span: Span) {
+async fn run<R, S>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, storage: S, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, rng: CharmRng, span: Span)
+where
+    R: Serialize + DeserializeOwned + Send + Sync + 'static,
+    S: CoreStorage + Send + Sync + 'static,
+    S::LogStorage: Send + 'static,
+{
     async move {
         let mut node = RaftNode::new(config, core_rx, storage, outbound_network, state_machine, rng);
         loop {
@@ -723,7 +727,12 @@ async fn run<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage + 
     }.instrument(span).await;
 }
 
-pub fn run_core<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage + Send + 'static>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, storage: S, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, rng: CharmRng) {
+pub fn run_core<R, S>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, storage: S, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, rng: CharmRng)
+where
+    R: Serialize + DeserializeOwned + Send + Sync + 'static,
+    S: CoreStorage + Send + Sync + 'static,
+    S::LogStorage: Send + 'static,
+{
     let span = Span::current();
     spawn(run(config, core_rx, storage, outbound_network, state_machine, rng, span));
 }
