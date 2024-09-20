@@ -47,6 +47,7 @@ pub async fn run_raft<S: StateMachine>(config: RaftConfig, state_machine: S, rng
 where
     S::Request: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
+    // Create storage files and directories if they don't exist.
     let storage = SqliteCoreStorage::new(&config.raft_storage_filename, &config.raft_log_storage_filename).await.unwrap(); 
     let (to_core_tx, to_core_rx) = unbounded_channel();
     let raft_handle = RaftHandle { core_handle: RaftCoreHandle::new(config.node_id.clone(), to_core_tx) };

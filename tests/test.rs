@@ -5,7 +5,7 @@ pub mod tests {
     use charm::rng::CharmRng;
     use charm::server::{run_charm_server, CharmPeer, CharmServerConfigBuilder};
     use rand::RngCore;
-    use std::fs::{create_dir, remove_dir_all};
+    use std::fs::{create_dir_all, remove_dir_all};
     use std::time::Duration;
     use turmoil::Sim;
     use wyrand::WyRand;
@@ -70,7 +70,7 @@ pub mod tests {
     fn run_cluster(test_seed: u64, sim: &mut Sim, seed_gen: &mut impl RngCore, num_nodes: usize) {
         // Set up the environment for the test.
         remove_dir_all(format!("test_data/{}", test_seed)).ok();
-        create_dir(format!("test_data/{}", test_seed)).unwrap();
+        create_dir_all(format!("test_data/{}", test_seed)).unwrap();
         
         const RAFT_PORT: u16 = 54321;
         const CHARM_PORT: u16 = 12345;
