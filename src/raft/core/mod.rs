@@ -140,7 +140,11 @@ pub struct RaftNode<R: Serialize + DeserializeOwned + Send + 'static, S: CoreSto
 
 impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<R, S> {
     #[must_use] pub fn new(
-        config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, mut rng: CharmRng) -> RaftNode<R> {
+        config: RaftConfig,
+        core_rx: UnboundedReceiver<CoreQueueEntry<R>>,
+        outbound_network: OutboundNetworkHandle,
+        state_machine: StateMachineHandle<R>,
+        mut rng: CharmRng) -> RaftNode<R, S> {
         let follower_state = FollowerState {
             election_timer: sleep(config.get_election_timeout(&mut rng)).shared(),
             leader_id: None,
@@ -242,13 +246,15 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
         }
     }
 
-    fn handle_election_timeout(&mut self) {
+    async fn handle_election_timeout(&mut self) {
         info!("Hit election timeout! Starting election.");
         // Enter the next term.
-        self.current_term = self.current_term.next();
+        let current_term = self.get_current_term().await;
+        let next_term = current_term.next();
+        self.set_current_term(next_term).await;
 
         // Vote for ourselves.
-        self.voted_for = Some(self.node_id().clone());
+        self.set_voted_for(Some(self.node_id().clone())).await;
 
         // Become a candidate, and reset the election timer.
         let election_timeout = self.get_election_timeout();
@@ -256,11 +262,13 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
         self.role = Candidate(candidate_state);
 
         // Send RequestVoteRequests to all nodes.
+        let last_log_index = self.get_log_storage().last_index().await.unwrap();
+        let last_log_term = self.get_log_storage().last_log_term().await.unwrap();
         let req = RequestVoteRequest {
-            term: self.current_term,
+            term: next_term,
             candidate_id: self.node_id().clone(),
-            last_log_index: self.log.last_index(),
-            last_log_term: self.log.last_log_term(),
+            last_log_index,
+            last_log_term,
         };
 
         for node_id in &self.config.other_nodes {
@@ -268,51 +276,54 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
         }
     }
 
-    fn handle_heartbeat_timeout(&mut self) {
+    async fn handle_heartbeat_timeout(&mut self) {
         // We only do anything if we are the leader.
         if let Leader(ref mut leader_state) = self.role {
             debug!("Sending heartbeat on timeout.");
             leader_state.heartbeat_timer = sleep(self.config.heartbeat_interval).shared();
-            self.broadcast_heartbeat();
+            self.broadcast_heartbeat().await;
         }
     }
 
-    fn handle_append_entries_request(&mut self, req: AppendEntriesRequest) -> AppendEntriesResponse {
+    async fn handle_append_entries_request(&mut self, req: AppendEntriesRequest) -> AppendEntriesResponse {
         debug!("Received AppendEntriesRequest: {:?}", req);
-        self.check_incoming_term(req.term);
+        self.check_incoming_term(req.term).await;
 
-        if req.term < self.current_term {
+        let current_term = self.get_current_term().await;
+        if req.term < current_term {
             // This request is out of date.
-            warn!("Request from {:?} has term {:?}, which is older than our term {:?}. Failing request.", req.leader_id, req.term, self.current_term);
+            warn!("Request from {:?} has term {:?}, which is older than our term {:?}. Failing request.",
+                req.leader_id, req.term, current_term);
             return self.append_entries_response(false);
         }
 
         if let Leader(_) = self.role {
             error!("Another node {:?} claims to be leader with the same term! This should never happen! Converting to follower.", req.leader_id);
-            self.convert_to_follower();
+            self.convert_to_follower().await;
         }
 
         if let Candidate(_) = self.role {
             // Someone else in the same term became a leader before us.
             info!("Another node {:?} while we were a candidate became leader. Converting to follower.", req.leader_id);
-            self.convert_to_follower();
+            self.convert_to_follower().await;
         }
 
         // Edge case: the log is empty.
-        if self.log.last_index() == Index(0) {
+        let mut last_index = self.get_log_storage().get_last_index().await.unwrap();
+        if last_index == Index(0) {
             // The log is empty. We can accept any entries.
             debug!("Log is empty. Accepting request.");
             self.reset_election_timer();
             for entry in req.entries {
-                self.log.append(entry);
+                last_index = self.get_log_storage().append(entry).await.unwrap();
             }
-            self.commit_index = req.leader_commit.min(self.log.last_index());
+            self.commit_index = req.leader_commit.min(last_index);
             self.update_leader(req.leader_id.clone());
             self.apply_committed();
             return self.append_entries_response(true);
         }
 
-        let prev_log_entry = self.log.get(req.prev_log_index);
+        let prev_log_entry = self.get_log_storage().get(req.prev_log_index).await.unwrap();
         if prev_log_entry.is_none() {
             // We don't have the previous log entry.
             warn!("Previous log entry not found. Failing request.");
@@ -329,10 +340,11 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
         // The previous log term matches. Append the new entries.
         debug!("Accepting request.");
         self.reset_election_timer();
-        self.check_and_append(&req.leader_id, req.entries, req.prev_log_index.next());
+        self.check_and_append(&req.leader_id, req.entries, req.prev_log_index.next()).await;
 
         if req.leader_commit > self.commit_index {
-            self.commit_index = req.leader_commit.min(self.log.last_index());
+            let last_index = self.get_log_storage().last_index().await.unwrap();
+            self.commit_index = req.leader_commit.min(last_index);
         }
 
         debug!("Sending successful response.");
@@ -341,13 +353,13 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
         self.append_entries_response(true)
     }
 
-    fn check_and_append(&mut self, leader_id: &NodeId, entries: Vec<LogEntry>, mut prev_log_index: Index) {
+    async fn check_and_append(&mut self, leader_id: &NodeId, entries: Vec<LogEntry>, mut prev_log_index: Index) {
         for entry in entries {
-            if let Some(prev_entry) = self.log.get(prev_log_index) {
+            if let Some(prev_entry) = self.get_log_storage().get(prev_log_index).await.unwrap() {
                 if prev_entry.term != entry.term {
                     // There is a conflict. Truncate the log and append the new entry.
                     warn!("Log conflict detected at index {:?}. Truncating log.", prev_log_index);
-                    self.log.truncate(prev_log_index);
+                    self.get_log_storage().truncate(prev_log_index).await.unwrap();
                     // Fail the futures that got truncated.
                     let to_fail = self.proposals.split_off(&prev_log_index);
                     for (_, proposal) in to_fail {
@@ -356,30 +368,30 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
                         })).unwrap();
                     }
 
-                    self.log.append(entry);
+                    self.get_log_storage().append(entry).await.unwrap();
                 }
             } else {
                 // No conflict, append the entry.
-                self.log.append(entry);
+                self.get_log_storage().append(entry).await.unwrap();
             }
 
             prev_log_index = prev_log_index.next();
         }
     }
 
-    fn append_entries_response(&self, success: bool) -> AppendEntriesResponse {
+    async fn append_entries_response(&self, success: bool) -> AppendEntriesResponse {
         AppendEntriesResponse {
             node_id: self.node_id().clone(),
-            term: self.current_term,
+            term: self.get_current_term().await,
             success,
-            last_log_index: self.log.last_index(),
+            last_log_index: self.get_log_storage().last_index().await.unwrap(),
         }
     }
 
-    fn handle_append_entries_response(&mut self, res: AppendEntriesResponse) {
+    async fn handle_append_entries_response(&mut self, res: AppendEntriesResponse) {
         debug!("Received AppendEntriesResponse: {:?}", res);
 
-        self.check_incoming_term(res.term);
+        self.check_incoming_term(res.term).await;
 
         // If we are not the leader, we don't care about these responses.
         if let Leader(ref mut leader_state) = self.role {
@@ -390,7 +402,8 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
                 debug!("Request was successful. Peer state for {:?} is now {:?}.", res.node_id, peer_state);
 
                 // Try to update the commit index.
-                let majority_match = leader_state.get_majority_match(self.log.last_index());
+                let last_index = self.get_log_storage().last_index().await.unwrap();
+                let majority_match = leader_state.get_majority_match(last_index);
                 if majority_match > self.commit_index {
                     debug!("Cluster majority advanced to index {:?}. Updating commit index.", majority_match);
                     self.commit_index = majority_match;
@@ -400,11 +413,12 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
                     swap(&mut self.proposals, &mut to_complete);
 
                     // Complete the futures, and send them to the state machine.
+                    let current_term = self.get_current_term().await;
                     for (idx, proposal) in to_complete {
                         proposal.commit_tx.send(Ok(())).unwrap();
                         let raft_info = RaftInfo {
                             node_id: self.node_id().clone(),
-                            term: self.current_term,
+                            term: current_term,
                             index: idx,
                         };
                         self.state_machine.apply(proposal.req, raft_info);
@@ -423,19 +437,21 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
     }
 
 
-    fn handle_request_vote_request(&mut self, req: RequestVoteRequest) -> RequestVoteResponse {
+    async fn handle_request_vote_request(&mut self, req: RequestVoteRequest) -> RequestVoteResponse {
         debug!("Received RequestVoteRequest: {:?}", req);
         info!("Received vote request from {:?}.", req.candidate_id);
 
-        self.check_incoming_term(req.term);
+        self.check_incoming_term(req.term).await;
 
-        if req.term < self.current_term {
+        let current_term = self.get_current_term().await;
+        if req.term < current_term {
             // This candidate is out of date.
             info!("Candidate has older term. Failing vote request.");
             return self.request_vote_response(false);
         }
 
-        let can_vote = match self.voted_for {
+        let voted_for = self.get_voted_for().await;
+        let can_vote = match voted_for {
             None => true,  // We haven't voted yet.
             Some(ref voted_for) => voted_for == &req.candidate_id,  // We already voted for this candidate.
         };
@@ -446,17 +462,17 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
         }
 
         // Check last entry terms.
-        let our_last_log_term = self.log.last_log_term();
+        let our_last_log_term = self.get_log_storage().last_log_term().await.unwrap();
         let candidate_last_log_term = req.last_log_term;
         if candidate_last_log_term > our_last_log_term {
             // The candidate has a higher term, so we approve!
             info!("Candidate has higher term. Voting for candidate {:?}.", req.candidate_id);
-            self.vote_for(&req.candidate_id);
+            self.vote_for(&req.candidate_id).await;
             return self.request_vote_response(true);
         }
 
         // If the terms are the same, we need to check the log lengths.
-        let our_last_log_index = self.log.last_index();
+        let our_last_log_index = self.get_log_storage().last_index().unwrap();
         let candidate_last_log_index = req.last_log_index;
         if candidate_last_log_index >= our_last_log_index {
             // The candidate has at least as much log as we do, so we approve!
@@ -470,27 +486,28 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
         self.request_vote_response(false)
     }
 
-    fn request_vote_response(&self, vote_granted: bool) -> RequestVoteResponse {
+    async fn request_vote_response(&self, vote_granted: bool) -> RequestVoteResponse {
+        let current_term = self.get_current_term().await;
         RequestVoteResponse {
             node_id: self.node_id().clone(),
-            term: self.current_term,
+            term: current_term,
             vote_granted,
         }
     }
 
 
-    fn vote_for(&mut self, candidate_id: &NodeId) {
-        self.voted_for = Some(candidate_id.clone());
+    async fn vote_for(&mut self, candidate_id: &NodeId) {
+        self.set_voted_for(Some(candidate_id.clone())).await;
 
         let election_timeout = self.get_election_timeout();
         let role = Follower(FollowerState { election_timer: sleep(election_timeout).shared(), leader_id: None });
         self.role = role;
     }
 
-    fn handle_request_vote_response(&mut self, res: RequestVoteResponse) {
+    async fn handle_request_vote_response(&mut self, res: RequestVoteResponse) {
         debug!("Received RequestVoteResponse: {:?}", res);
 
-        self.check_incoming_term(res.term);
+        self.check_incoming_term(res.term).await;
 
         match self.role {
             Candidate(ref mut state) => {
@@ -517,7 +534,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
         }
     }
 
-    fn handle_propose(&mut self, request: R, commit_tx: oneshot::Sender<Result<(), RaftCoreError>>) {
+    async fn handle_propose(&mut self, request: R, commit_tx: oneshot::Sender<Result<(), RaftCoreError>>) {
         match self.role {
             Candidate(_) => {
                 debug!("Not the leader, but a candidate. Failing proposal.");
@@ -533,24 +550,26 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
 
             Leader(_) => {
                 let serialized = serde_json::to_vec(&request).unwrap();
+                let current_term = self.get_current_term().await;
                 let log_entry = LogEntry {
                     leader_id: self.node_id().clone(),
-                    term: self.current_term,
+                    term: current_term,
                     data: Data(serialized),
                 };
-                let index = self.log.append(log_entry);
+                let index = self.get_log_storage().append(log_entry).unwrap();
                 debug!("Proposal appended to log at index {:?}.", index);
                 self.proposals.insert(index, Proposal { req: request, commit_tx });
             }
         }
     }
 
-    fn become_leader(&mut self) {
-        info!("Becoming the leader in term {:?}!", self.current_term);
+    async fn become_leader(&mut self) {
+        let current_term = self.get_current_term().await;
+        info!("Becoming the leader in term {:?}!", current_term);
         let mut peer_states = HashMap::new();
 
         for node_id in &self.config.other_nodes {
-            let next_index = self.log.last_index().next();
+            let next_index = self.get_log_storage().get_last_index().unwrap().next();
             let match_index = Index(0);
             peer_states.insert(node_id.clone(), PeerState { next_index, match_index });
         }
@@ -563,26 +582,31 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
         self.role = role;
 
         // Send initial empty AppendEntriesRequests to all nodes.
-        self.broadcast_heartbeat();
+        self.broadcast_heartbeat().await
     }
 
-    fn broadcast_heartbeat(&mut self) {
+    async fn broadcast_heartbeat(&mut self) {
         for node_id in &self.config.other_nodes {
-            self.send_append_entries(node_id);
+            self.send_append_entries(node_id).await
         }
     }
 
-    fn send_append_entries(&self, node_id: &NodeId) {
+    async fn send_append_entries(&self, node_id: &NodeId) {
         if let Leader(ref leader_state) = self.role {
             let peer_state = leader_state.get_peer_state(node_id);
             let next_index = peer_state.next_index;
             let prev_log_index = next_index.prev();
-            let prev_log_term = self.log.get(prev_log_index).map_or(Term(0), |entry| entry.term);
+            let prev_log_term = self
+                .get_log_storage()
+                .get(prev_log_index)
+                .await
+                .unwrap()
+                .map_or(Term(0), |entry| entry.term);
 
-            let entries = self.log.entries_from(next_index);
+            let entries = self.get_log_storage().entries_from(next_index).await.unwrap();
 
             let req = AppendEntriesRequest {
-                term: self.current_term,
+                term: self.get_current_term().await,
                 leader_id: self.node_id().clone(),
                 prev_log_index,
                 prev_log_term,
@@ -595,16 +619,17 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
     }
 
     // Convert to follower if the term is higher than the current term.
-    fn check_incoming_term(&mut self, term: Term) {
-        if self.current_term < term {
-            info!("Received message with term {:?} higher than our term {:?}. Converting to follower.", term, self.current_term);
-            self.current_term = term;
-            self.convert_to_follower();
+    async fn check_incoming_term(&mut self, term: Term) {
+        let current_term = self.get_current_term().await;
+        if current_term < term {
+            info!("Received message with term {:?} higher than our term {:?}. Converting to follower.", term, current_term);
+            self.set_current_term(term).await;
+            self.convert_to_follower().await;
         }
     }
 
-    fn convert_to_follower(&mut self) {
-        self.voted_for = None;
+    async fn convert_to_follower(&mut self) {
+        self.set_voted_for(None).await;
         let follower_state = FollowerState { election_timer: sleep(self.get_election_timeout()).shared(), leader_id: None };
         let role = Follower(follower_state);
         self.role = role;
@@ -628,8 +653,8 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
     fn apply_committed(&mut self) {
         while self.last_applied < self.commit_index {
             self.last_applied = self.last_applied.next();
-            let entry = self.log.get(self.last_applied).expect("entry not found");
-            let req: R = serde_json::from_slice(&entry.data.0).expect("deserialization failed");
+            let entry = self.get_log_storage().get(self.last_applied).unwrap();
+            let req: R = serde_json::from_slice(&entry.data.0).unwrap();
             let raft_info = RaftInfo {
                 node_id: entry.leader_id.clone(),
                 term: entry.term.clone(),
@@ -680,7 +705,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
         self.storage.set_voted_for(candidate_id).await.expect("failed to set voted for")
     }
 
-    async fn get_log_storage(&self) -> S::LogStorage {
+    fn get_log_storage(&self) -> S::LogStorage {
         self.storage.log_storage()
     }
 }
