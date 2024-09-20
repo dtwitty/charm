@@ -220,12 +220,18 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
         match cqe {
             CoreQueueEntry::AppendEntriesRequest { request, response_tx } => {
                 let response = self.handle_append_entries_request(request).await;
-                response_tx.send(response).unwrap();
+                let r = response_tx.send(response);
+                if r.is_err() {
+                    warn!("Failed to send AppendEntriesResponse. Client request may have timed out.");
+                }
             }
 
             CoreQueueEntry::RequestVoteRequest { request, response_tx } => {
                 let response = self.handle_request_vote_request(request).await;
-                response_tx.send(response).unwrap();
+                let r = response_tx.send(response);
+                if r.is_err() {
+                    warn!("Failed to send RequestVoteResponse. Client request may have timed out.");
+                }
             }
 
             CoreQueueEntry::AppendEntriesResponse(response) => {
@@ -245,11 +251,11 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
     }
 
     async fn handle_election_timeout(&mut self) {
-        info!("Hit election timeout! Starting election.");
         // Enter the next term.
         let current_term = self.get_current_term().await;
         let next_term = current_term.next();
         self.set_current_term(next_term).await;
+        info!("Hit election timeout! Starting election in term {:?}.", next_term);
 
         // Vote for ourselves.
         self.set_voted_for(Some(self.node_id().clone())).await;
@@ -306,25 +312,31 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
             self.convert_to_follower().await;
         }
 
-        // Edge case: the log is empty.
-        let mut last_index = self.get_log_storage().last_index().await.unwrap();
-        if last_index == Index(0) {
+        // Edge case: this is the first entry.
+        if req.prev_log_index == Index(0) {
             // The log is empty. We can accept any entries.
-            debug!("Log is empty. Accepting request.");
-            self.reset_election_timer();
+            debug!("Append entries from start of the log. Accepting request.");
+
+            // Truncate the log.
+            self.get_log_storage().truncate(Index(0)).await.unwrap();
+
+            let mut last_index = Index(0);
             for entry in req.entries {
                 last_index = self.get_log_storage().append(entry).await.unwrap();
             }
+            
             self.commit_index = req.leader_commit.min(last_index);
             self.update_leader(req.leader_id.clone());
             self.apply_committed().await;
+
+            self.reset_election_timer();
             return self.append_entries_response(true).await;
         }
 
         let prev_log_entry = self.get_log_storage().get(req.prev_log_index).await.unwrap();
         if prev_log_entry.is_none() {
             // We don't have the previous log entry.
-            warn!("Previous log entry not found. Failing request.");
+            warn!("Append request claimed log index {:?} but we don't have that entry. Failing request.", req.prev_log_index);
             return self.append_entries_response(false).await;
         }
 

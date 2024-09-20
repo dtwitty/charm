@@ -12,7 +12,6 @@ pub mod tests {
 
     #[test]
     fn test_charm() -> turmoil::Result {
-        configure_tracing();
         // Run a bunch of tests with different seeds to try to find a seed that causes a failure.
         for seed in 1..1000 {
             let res = test_one(seed);
