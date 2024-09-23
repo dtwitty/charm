@@ -40,7 +40,7 @@ impl SqliteLogStorage {
 impl LogStorage for SqliteLogStorage {
     type ErrorType = anyhow::Error;
 
-    async fn append(&mut self, entry: LogEntry) -> Result<Index, Self::ErrorType> {
+    async fn append(&self, entry: LogEntry) -> Result<Index, Self::ErrorType> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("INSERT INTO log (leader_host, leader_port, term, data) VALUES (?, ?, ?, ?)")
             .bind(entry.leader_id.host)
@@ -110,7 +110,7 @@ impl LogStorage for SqliteLogStorage {
             .map_err(Into::into)
     }
 
-    async fn truncate(&mut self, index: Index) -> Result<(), Self::ErrorType> {
+    async fn truncate(&self, index: Index) -> Result<(), Self::ErrorType> {
         sqlx::query("DELETE FROM log WHERE id >= ?")
             .bind(index.0 as i64)
             .execute(&self.pool)
@@ -122,51 +122,16 @@ impl LogStorage for SqliteLogStorage {
 
 #[cfg(test)]
 mod log_storage_tests {
-    use crate::raft::core::storage::sqlite_storage::SqliteLogStorage;
-    use crate::raft::core::storage::LogStorage;
-    use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
+    use crate::raft::core::storage::sqlite::SqliteLogStorage;
+    use crate::raft::core::storage::test::test_log_storage;
     use tempfile::NamedTempFile;
 
     #[tokio::test]
     async fn test_sqlite_log_storage() {
         let temp_file = NamedTempFile::new().unwrap();
         let filename = temp_file.path().to_str().unwrap();
-
-        let mut storage = SqliteLogStorage::new(filename).await.unwrap();
-
-        let entry1 = LogEntry {
-            leader_id: NodeId {
-                host: "node1".to_string(),
-                port: 1234,
-            },
-            term: Term(1),
-            data: Data(b"hello".to_vec()),
-        };
-        let entry2 = LogEntry {
-            leader_id: NodeId {
-                host: "node2".to_string(),
-                port: 5678,
-            },
-            term: Term(1),
-            data: Data(b"world".to_vec()),
-        };
-
-        let index1 = storage.append(entry1.clone()).await.unwrap();
-        let index2 = storage.append(entry2.clone()).await.unwrap();
-
-        assert_eq!(storage.get(index1).await.unwrap(), Some(entry1.clone()));
-        assert_eq!(storage.get(index2).await.unwrap(), Some(entry2.clone()));
-
-        assert_eq!(storage.last_index().await.unwrap(), index2);
-        assert_eq!(storage.last_log_term().await.unwrap(), entry2.term);
-
-        let entries = storage.entries_from(Index(1)).await.unwrap();
-        assert_eq!(entries, vec![entry1.clone(), entry2.clone()]);
-
-        storage.truncate(Index(1)).await.unwrap();
-        assert_eq!(storage.get(index1).await.unwrap(), None);
-        assert_eq!(storage.get(index2).await.unwrap(), None);
-        assert_eq!(storage.last_index().await.unwrap(), Index(0));
+        let storage = SqliteLogStorage::new(filename).await.unwrap();
+        test_log_storage(storage).await;
     }
 }
 
@@ -269,7 +234,7 @@ impl CoreStorage for SqliteCoreStorage {
 
 #[cfg(test)]
 mod core_storage_tests {
-    use crate::raft::core::storage::sqlite_storage::SqliteCoreStorage;
+    use crate::raft::core::storage::sqlite::SqliteCoreStorage;
     use crate::raft::core::storage::CoreStorage;
     use crate::raft::types::{NodeId, Term};
     use tempfile::NamedTempFile;
