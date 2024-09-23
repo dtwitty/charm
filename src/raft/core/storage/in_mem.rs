@@ -107,6 +107,7 @@ struct InMemStorageInner {
     voted_for: Option<NodeId>,
 }
 
+#[derive(Clone)]
 pub struct InMemStorage {
     log_storage: InMemLogStorage,
     inner: Arc<RwLock<InMemStorageInner>>,
