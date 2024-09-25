@@ -532,10 +532,10 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
                 if res.vote_granted {
                     state.votes_received += 1;
 
-
-                    let majority = self.config.other_nodes.len() / 2 + 1;
+                    let total_nodes = self.config.other_nodes.len() + 1;
+                    let majority = total_nodes / 2 + 1;
                     debug!("Vote granted by {:?}. We now have {:?} out of {:?} needed votes", res.node_id, state.votes_received, majority);
-                    if state.votes_received > majority as u64 && !self.role.is_leader() {
+                    if state.votes_received >= majority as u64 && !self.role.is_leader() {
                         // Great success!
                         self.become_leader().await;
                     }

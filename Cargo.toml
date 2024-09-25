@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "main"
-path = "src/bin/main.rs"
+name = "charm"
+path = "src/bin/charm.rs"
 
 [lib]
 name = "charm"
@@ -31,7 +31,7 @@ tokio-stream = "0.1.16"
 tonic = "0.12.2"
 tower = { version = "0.5.0", features = ["full"] }
 tracing = "0.1.40"
-tracing-subscriber = "0.3.18"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 turmoil = { version = "0.6.3", optional = true }
 wyrand = "0.2.1"
 hyper = "1.4.1"
