@@ -1,11 +1,11 @@
 use crate::charm::client::EasyCharmClient;
 use crate::charm::config::CharmConfig;
 use crate::charm::pb::charm_server::{Charm, CharmServer};
-use crate::charm::pb::{DeleteRequest, DeleteResponse, GetRequest, GetResponse, PutRequest, PutResponse};
+use crate::charm::pb::{DeleteRequest, DeleteResponse, GetRequest, GetResponse, PutRequest, PutResponse, ResponseHeader};
 use crate::charm::retry::RetryStrategyBuilder;
 use crate::charm::state_machine::CharmStateMachineRequest;
 use crate::raft::core::error::RaftCoreError::NotLeader;
-use crate::raft::types::NodeId;
+use crate::raft::types::{NodeId, RaftInfo};
 use crate::raft::RaftHandle;
 use crate::rng::CharmRng;
 use crate::server::CharmPeer;
@@ -15,7 +15,7 @@ use std::time::Duration;
 use tokio::spawn;
 use tokio::sync::oneshot;
 use tonic::{async_trait, Request, Response, Status};
-use tracing::{debug, Span};
+use tracing::{debug, error, Span};
 
 struct CharmServerImpl {
     config: CharmConfig,
@@ -45,13 +45,31 @@ impl CharmServerImpl {
     }
 
     fn get_leader_peer(&self, leader: &NodeId) -> anyhow::Result<CharmPeer> {
+        // Check if this node ID is us.
+        if leader.host == self.config.listen.host && leader.port == self.config.listen.raft_port {
+            return Ok(CharmPeer {
+                host: self.config.listen.host.clone(),
+                raft_port: self.config.listen.raft_port,
+                charm_port: self.config.listen.charm_port,
+            });
+        }
+        
         // Get the host off the leader node ID.
         // Look in the config for a peer with the same host.
         self.config.peers
             .iter()
-            .find(|peer| peer.host == leader.host)
+            .find(|peer| peer.host == leader.host && peer.raft_port == leader.port)
             .cloned()
-            .ok_or(anyhow::anyhow!("no peer found for leader host `{}`", leader.host))
+            .ok_or(anyhow::anyhow!("no peer found for leader `{:?}`", leader))
+    }
+
+    fn get_response_header(&self, raft_info: &RaftInfo) -> anyhow::Result<ResponseHeader> {
+        let leader_peer = self.get_leader_peer(&raft_info.node_id)?;
+        Ok(ResponseHeader {
+            leader_id: format!("{}:{}", leader_peer.host, leader_peer.charm_port),
+            raft_term: 0,
+            raft_index: 0,
+        })
     }
 }
 
@@ -73,7 +91,10 @@ impl Charm for CharmServerImpl {
                 let response = rx.await.unwrap();
                 let value = response.value;
                 let raft_info = response.raft_info;
-                let response_header = Some(raft_info.into());
+                let response_header = Some(self.get_response_header(&raft_info).map_err(|e| {
+                    error!("Failed to find peer {:?}. Peer list: {:?}", raft_info.node_id, self.config.peers);
+                    Status::internal(e.to_string())
+                })?);
                 Ok(Response::new(GetResponse { response_header, value }))
             }
 
@@ -107,7 +128,7 @@ impl Charm for CharmServerImpl {
                 // Great success!
                 let response = rx.await.unwrap();
                 let raft_info = response.raft_info;
-                let response_header = Some(raft_info.into());
+                let response_header = Some(self.get_response_header(&raft_info).map_err(|e| Status::internal(e.to_string()))?);
                 Ok(Response::new(PutResponse { response_header }))
             }
 
@@ -138,9 +159,11 @@ impl Charm for CharmServerImpl {
         match commit {
             Ok(()) => {
                 // Great success!
-                let repsonse = rx.await.unwrap();
-                let raft_info = repsonse.raft_info;
-                let response_header = Some(raft_info.into());
+                let response = rx.await.unwrap();
+                let raft_info = response.raft_info;
+                let response_header = Some(self.get_response_header(&raft_info).map_err(|e|
+                    Status::internal(e.to_string())
+                )?);
                 Ok(Response::new(DeleteResponse { response_header }))
             }
 
