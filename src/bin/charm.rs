@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use charm::server::{run_charm_server, CharmPeer, CharmServerConfigBuilder};
 use clap::Parser;
 use rand::RngCore;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -34,7 +35,7 @@ struct Args {
 async fn main() {
     tracing::subscriber::set_global_default(
         tracing_subscriber::fmt()
-            .with_env_filter("info,charm::raft::core=debug")
+            .with_env_filter(EnvFilter::from_default_env())
             .finish(),
     )
         .expect("Configure tracing");

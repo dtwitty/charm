@@ -1,7 +1,7 @@
 use crate::raft::core::storage::{CoreStorage, LogStorage};
 use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
 use std::fs;
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::path::Path;
 use tonic::async_trait;
 
@@ -124,6 +124,8 @@ impl LogStorage for SqliteLogStorage {
 mod log_storage_tests {
     use crate::raft::core::storage::sqlite::SqliteLogStorage;
     use crate::raft::core::storage::test::test_log_storage;
+    use crate::raft::core::storage::LogStorage;
+    use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
     use tempfile::NamedTempFile;
 
     #[tokio::test]
@@ -132,6 +134,39 @@ mod log_storage_tests {
         let filename = temp_file.path().to_str().unwrap();
         let storage = SqliteLogStorage::new(filename).await.unwrap();
         test_log_storage(storage).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_log_storage_persist() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let filename = temp_file.path().to_str().unwrap();
+        {
+            let storage = SqliteLogStorage::new(filename).await.unwrap();
+
+            let entry1 = LogEntry {
+                leader_id: NodeId {
+                    host: "node1".to_string(),
+                    port: 1234,
+                },
+                term: Term(1),
+                data: Data(b"hello".to_vec()),
+            };
+            let entry2 = LogEntry {
+                leader_id: NodeId {
+                    host: "node2".to_string(),
+                    port: 5678,
+                },
+                term: Term(1),
+                data: Data(b"world".to_vec()),
+            };
+
+            storage.append(entry1.clone()).await.unwrap();
+            storage.append(entry2.clone()).await.unwrap();
+        }
+
+        let storage = SqliteLogStorage::new(filename).await.unwrap();
+        assert!(storage.get(Index(1)).await.unwrap().is_some());
+        assert!(storage.get(Index(2)).await.unwrap().is_some());
     }
 }
 
@@ -286,5 +321,5 @@ fn create_file_with_dirs<P: AsRef<Path>>(path: P) {
         fs::create_dir_all(parent).unwrap();
     }
     // Create the file (or open if it exists)
-    File::create(path).unwrap();
+    OpenOptions::new().create(true).write(true).open(path).unwrap();
 }
