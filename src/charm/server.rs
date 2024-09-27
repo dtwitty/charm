@@ -1,9 +1,11 @@
 use crate::charm::client::make_charm_client;
 use crate::charm::config::CharmConfig;
+use crate::charm::pb;
 use crate::charm::pb::charm_client::CharmClient;
 use crate::charm::pb::charm_server::{Charm, CharmServer};
-use crate::charm::pb::{DeleteRequest, DeleteResponse, GetRequest, GetResponse, PutRequest, PutResponse, ResponseHeader};
-use crate::charm::state_machine::CharmStateMachineRequest;
+use crate::charm::pb::event::Event::{Delete, Put};
+use crate::charm::pb::{DeleteEvent, DeleteRequest, DeleteResponse, GetRequest, GetResponse, HistoryRequest, HistoryResponse, PutEvent, PutRequest, PutResponse, ResponseHeader};
+use crate::charm::state_machine::{CharmStateMachineRequest, Event};
 use crate::raft::core::error::RaftCoreError::NotLeader;
 use crate::raft::types::{NodeId, RaftInfo};
 use crate::raft::RaftHandle;
@@ -63,6 +65,24 @@ impl CharmServerImpl {
             raft_term: raft_info.term.0,
             raft_index: raft_info.index.0,
         }
+    }
+
+    fn event_to_pb(&self, event: Event) -> pb::Event {
+        match event {
+            Event::Put { value, raft_info } => {
+                let response_header = Some(self.get_response_header(&raft_info));
+                pb::Event { event: Some(Put(PutEvent { request_header: None, response_header, value })) }
+            },
+
+            Event::Delete { raft_info } => {
+                let response_header = Some(self.get_response_header(&raft_info));
+                pb::Event { event: Some(Delete(DeleteEvent { request_header: None, response_header })) }
+            }
+        }
+    }
+
+    fn history_to_pb(&self, history: Vec<Event>) -> Vec<pb::Event> {
+        history.into_iter().map(|event| self.event_to_pb(event)).collect()
     }
 
     async fn handle_request<RequestPb, ResponsePb, ToStateMachineRequest, StateMachineResponse, ToResponsePb, Forward, F>(
@@ -147,6 +167,21 @@ impl Charm for CharmServerImpl {
                 DeleteResponse { response_header }
             },
             |mut client, req| async move { client.delete(req).await }).await
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn history(&self, request: Request<HistoryRequest>) -> Result<Response<HistoryResponse>, Status> {
+        let request = request.into_inner();
+        debug!("HISTORY: {:?}", request);
+        self.handle_request(
+            request,
+            |request_pb, tx, span| CharmStateMachineRequest::History { key: request_pb.key, response: Some(tx), span: Some(span) },
+            |response| {
+                let response_header = Some(self.get_response_header(&response.raft_info));
+                let events = self.history_to_pb(response.events);
+                HistoryResponse { response_header, events }
+            },
+            |mut client, req| async move { client.history(req).await }).await
     }
 }
 

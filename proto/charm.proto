@@ -105,5 +105,5 @@ service Charm {
   rpc Delete(DeleteRequest) returns (DeleteResponse) {}
 
   // History retrieves the history of events for a key.
-  //rpc History(HistoryRequest) returns (HistoryResponse) {}
+  rpc History(HistoryRequest) returns (HistoryResponse) {}
 }
