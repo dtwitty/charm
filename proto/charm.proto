@@ -1,14 +1,45 @@
 syntax = "proto3";
 package charmpb;
 
+// Unique identifier for a client.
+message ClientId {
+  // These 2 fields represent a UUIDv4 (ie, a mostly-random 128-bit number)
+  uint64 lo_bits = 1;
+  uint64 hi_bits = 2;
+}
+
+// RequestHeader is included in all requests to the Charm service.
+message RequestHeader {
+  // The client sending this message.
+  // Clients are expected to generate a new ClientId at startup and use it for all requests.
+  ClientId client_id = 1;
+
+  // The request number for this client.
+  // Expectations:
+  // - The client should increment this number for each new request.
+  // - When retrying a request, the client should use the same request number.
+  uint64 request_number = 2;
+}
+
+// ResponseHeader is included in all responses from the Charm service.
 message ResponseHeader {
+  // The node that processed this request. This might not be the same node that the client sent the request to, as
+  // requests can be forwarded to the leader.
+  // Clients may choose to redirect future requests to this node for better performance.
   string leader_id = 1;
+
+  // The term of the leader that processed this request.
+  // Useful for debugging and understanding the state of the cluster.
   uint64 raft_term = 2;
+
+  // The index of the log entry that contains this response.
+  // This forms a logical clock that can be used to order all operations against the KV store.
   uint64 raft_index = 3;
 }
 
 message GetRequest {
-  string key = 1;
+  RequestHeader request_header = 1;
+  string key = 2;
 }
 
 message GetResponse {
@@ -17,8 +48,9 @@ message GetResponse {
 }
 
 message PutRequest {
-  string key = 1;
-  string value = 2;
+  RequestHeader request_header = 1;
+  string key = 2;
+  string value = 3;
 }
 
 message PutResponse {
@@ -26,15 +58,52 @@ message PutResponse {
 }
 
 message DeleteRequest {
-  string key = 1;
+  RequestHeader request_header = 1;
+  string key = 2;
 }
 
 message DeleteResponse {
   ResponseHeader response_header = 1;
 }
 
+message HistoryRequest {
+  RequestHeader request_header = 1;
+  string key = 2;
+}
+
+message PutEvent {
+  RequestHeader request_header = 1;
+  ResponseHeader response_header = 2;
+  string value = 3;
+}
+
+message DeleteEvent {
+  RequestHeader request_header = 1;
+  ResponseHeader response_header = 2;
+}
+
+message Event {
+  oneof event {
+    PutEvent put = 1;
+    DeleteEvent delete = 2;
+  }
+}
+
+message HistoryResponse {
+  ResponseHeader response_header = 1;
+  repeated Event events = 2;
+}
+
 service Charm {
+  // Get retrieves the value for a key.
   rpc Get(GetRequest) returns (GetResponse) {}
+
+  // Put sets the value for a key.
   rpc Put(PutRequest) returns (PutResponse) {}
+
+  // Delete removes the value for a key.
   rpc Delete(DeleteRequest) returns (DeleteResponse) {}
+
+  // History retrieves the history of events for a key.
+  //rpc History(HistoryRequest) returns (HistoryResponse) {}
 }

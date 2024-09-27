@@ -1,17 +1,22 @@
 use crate::charm::pb::charm_client::CharmClient;
-use crate::charm::pb::{DeleteRequest, DeleteResponse, GetRequest, GetResponse, PutRequest, PutResponse};
+use crate::charm::pb::{ClientId, DeleteRequest, DeleteResponse, GetRequest, GetResponse, PutRequest, PutResponse, RequestHeader};
 use crate::charm::retry::{RetryStrategy, RetryStrategyBuilder, RetryStrategyIterator};
 use failsafe::failure_policy::{success_rate_over_time_window, SuccessRateOverTimeWindow};
 use failsafe::{Config, Instrument, StateMachine};
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio_retry::Retry;
 use tonic::transport::Channel;
 use tonic::Response;
 use tracing::{debug, info, instrument, warn};
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct EasyCharmClient {
-    addr:String,
+    client_id: Uuid,
+    request_number: Arc<AtomicU64>,
+    addr: String,
     client: CharmClient<Channel>,
     retry_strategy: RetryStrategy,
     circuit_breaker: StateMachine<SuccessRateOverTimeWindow<RetryStrategyIterator>, CircuitBreakerInstrument>,
@@ -52,7 +57,11 @@ impl EasyCharmClient {
             .failure_policy(failure_policy)
             .instrument(CircuitBreakerInstrument {})
             .build();
+        let client_id = Uuid::new_v4();
+        let request_number = Arc::new(AtomicU64::new(0));
         Ok(EasyCharmClient {
+            client_id,
+            request_number,
             addr,
             client,
             retry_strategy,
@@ -60,14 +69,14 @@ impl EasyCharmClient {
         })
     }
 
-
     #[instrument(fields(addr=self.addr.clone()), skip_all)]
     pub async fn get(&self, key: String) -> anyhow::Result<GetResponse> {
         debug!("Getting key: {}", key);
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;
-            let mut request = tonic::Request::new(GetRequest { key: key.clone() });
+            let request_header = self.make_request_header();
+            let mut request = tonic::Request::new(GetRequest { request_header, key: key.clone() });
             request.set_timeout(Duration::from_secs(1));
             let result = self.client.clone().get(request).await;
             let response = self.instrument_response(result)?;
@@ -81,7 +90,8 @@ impl EasyCharmClient {
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;
-            let mut request = tonic::Request::new(PutRequest { key: key.clone(), value: value.clone() });
+            let request_header = self.make_request_header();
+            let mut request = tonic::Request::new(PutRequest { request_header, key: key.clone(), value: value.clone() });
             request.set_timeout(Duration::from_secs(1));
             let result = self.client.clone().put(request).await;
             let response = self.instrument_response(result)?;
@@ -95,7 +105,8 @@ impl EasyCharmClient {
         let retry_strategy = self.retry_strategy.clone();
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;
-            let mut request = tonic::Request::new(DeleteRequest { key: key.clone() });
+            let request_header = self.make_request_header();
+            let mut request = tonic::Request::new(DeleteRequest { request_header, key: key.clone() });
             request.set_timeout(Duration::from_secs(1));
             let result = self.client.clone().delete(request).await;
             let response = self.instrument_response(result)?;
@@ -122,9 +133,23 @@ impl EasyCharmClient {
             }
         }
     }
+
+    fn make_request_header(&self) -> Option<RequestHeader> {
+        let (hi_bits, lo_bits) = self.client_id.as_u64_pair();
+        let client_id = Some(ClientId {
+            lo_bits,
+            hi_bits,
+        });
+        let request_number = self.request_number.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        Some(RequestHeader {
+            client_id,
+            request_number,
+        })
+    }
 }
 
-fn make_charm_client(addr: String) -> anyhow::Result<CharmClient<Channel>> {
+pub fn make_charm_client(addr: String) -> anyhow::Result<CharmClient<Channel>> {
     let endpoint = Channel::from_shared(addr)?;
     #[cfg(not(feature = "turmoil"))]
     let channel = endpoint.connect_lazy();

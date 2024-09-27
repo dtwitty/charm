@@ -92,34 +92,7 @@ pub mod tests {
 
             let i = client_rng.next_u64() % 3;
             let event = match i {
-                0 => {
-                    let key = format!("key{}", client_rng.next_u64() % 3);
-                    let value = format!("value{}", client_rng.next_u64());
-                    let response = client.put(key.clone(), value.clone()).await;
-                    let end = elapsed();
-                    let rr = RequestResponse::Put(PutRequest { key, value }, response);
-                    Event { request_response: rr, host: host.clone(), start, end }
-                }
-                1 => {
-                    let key = format!("key{}", client_rng.next_u64() % 3);
-                    let response = client.get(key.clone()).await;
-                    let end = elapsed();
-                    let rr = RequestResponse::Get(GetRequest { key }, response);
-                    Event { request_response: rr, host: host.clone(), start, end }
-                }
-                2 => {
-                    let key = format!("key{}", client_rng.next_u64() % 3);
-                    let response = client.delete(key.clone()).await;
-                    let end = elapsed();
-                    let rr = RequestResponse::Delete(DeleteRequest { key }, response);
-                    Event {
-                        request_response: rr,
-                        host: host.clone(),
-                        start,
-                        end,
-                    }
-                }
-                _ => unreachable!(),
+                _ => todo!(),
             };
 
             history.lock().unwrap().push(event);

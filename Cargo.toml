@@ -38,6 +38,7 @@ hyper = "1.4.1"
 hyper-util = { version = "0.1.7", features = ["full"] }
 sqlx = { version = "0.8.2", features = ["runtime-tokio", "sqlite", "derive", "macros"] }
 tempfile = "3.12.0"
+uuid = { version = "1.10.0", features = ["v4"] }
 
 [dev-dependencies]
 turmoil = "0.6.3"
