@@ -145,6 +145,7 @@ impl EasyCharmClient {
         Some(RequestHeader {
             client_id,
             request_number,
+            first_incomplete_request_number: 0
         })
     }
 }
