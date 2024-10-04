@@ -19,6 +19,11 @@ message RequestHeader {
   // - The client should increment this number for each new request.
   // - When retrying a request, the client should use the same request number.
   uint64 request_number = 2;
+
+  // This is the lowest request number that the client has not yet received a response for.
+  // It might be the same as request_number if the client has not yet received any responses.
+  // The server may garbage collect responses for requests with request numbers less than this value.
+  uint64 first_incomplete_request_number = 3;
 }
 
 // ResponseHeader is included in all responses from the Charm service.
@@ -66,32 +71,12 @@ message DeleteResponse {
   ResponseHeader response_header = 1;
 }
 
-message HistoryRequest {
+message MarkCompleteRequest {
   RequestHeader request_header = 1;
-  string key = 2;
 }
 
-message PutEvent {
-  RequestHeader request_header = 1;
-  ResponseHeader response_header = 2;
-  string value = 3;
-}
-
-message DeleteEvent {
-  RequestHeader request_header = 1;
-  ResponseHeader response_header = 2;
-}
-
-message Event {
-  oneof event {
-    PutEvent put = 1;
-    DeleteEvent delete = 2;
-  }
-}
-
-message HistoryResponse {
+message MarkCompleteResponse {
   ResponseHeader response_header = 1;
-  repeated Event events = 2;
 }
 
 service Charm {
@@ -104,6 +89,6 @@ service Charm {
   // Delete removes the value for a key.
   rpc Delete(DeleteRequest) returns (DeleteResponse) {}
 
-  // History retrieves the history of events for a key.
-  //rpc History(HistoryRequest) returns (HistoryResponse) {}
+  // MarkComplete is used to acknowledge that the client has received all responses up to the given request number.
+  //rpc MarkComplete(MarkCompleteRequest) returns (MarkCompleteResponse) {}
 }
