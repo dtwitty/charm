@@ -4,8 +4,8 @@ use crate::charm::pb;
 use crate::charm::pb::charm_client::CharmClient;
 use crate::charm::pb::charm_server::{Charm, CharmServer};
 use crate::charm::pb::event::Event::{Delete, Put};
-use crate::charm::pb::{ClientId, DeleteEvent, DeleteRequest, DeleteResponse, GetRequest, GetResponse, HistoryRequest, HistoryResponse, PutEvent, PutRequest, PutResponse, ResponseHeader};
-use crate::charm::state_machine::{CharmStateMachineRequest, Event, RequestId};
+use crate::charm::pb::{DeleteEvent, DeleteRequest, DeleteResponse, GetRequest, GetResponse, HistoryRequest, HistoryResponse, PutEvent, PutRequest, PutResponse, ResponseHeader};
+use crate::charm::state_machine::{CharmStateMachineRequest, Event};
 use crate::raft::core::error::RaftCoreError::NotLeader;
 use crate::raft::types::{NodeId, RaftInfo};
 use crate::raft::RaftHandle;
@@ -48,7 +48,7 @@ impl CharmServerImpl {
                 charm_port: self.config.listen.charm_port,
             });
         }
-
+        
         // Get the host off the leader node ID.
         // Look in the config for a peer with the same host.
         self.config.peers
@@ -67,33 +67,16 @@ impl CharmServerImpl {
         }
     }
 
-    fn request_id_to_request_header(&self, request_id: RequestId) -> pb::RequestHeader {
-        let (hi_bits, lo_bits) = request_id.client_id.as_u64_pair();
-        let request_number = request_id.request_number;
-
-        pb::RequestHeader {
-            client_id: Some(
-                ClientId {
-                    lo_bits,
-                    hi_bits,
-                }
-            ),
-            request_number,
-        }
-    }
-
     fn event_to_pb(&self, event: Event) -> pb::Event {
         match event {
-            Event::Put { request_id, value, raft_info } => {
-                let request_header = Some(self.request_id_to_request_header(request_id));
+            Event::Put { value, raft_info } => {
                 let response_header = Some(self.get_response_header(&raft_info));
-                pb::Event { event: Some(Put(PutEvent { request_header, response_header, value })) }
+                pb::Event { event: Some(Put(PutEvent { request_header: None, response_header, value })) }
             },
 
-            Event::Delete { request_id, raft_info } => {
-                let request_header = Some(self.request_id_to_request_header(request_id));
+            Event::Delete { raft_info } => {
                 let response_header = Some(self.get_response_header(&raft_info));
-                pb::Event { event: Some(Delete(DeleteEvent { request_header, response_header })) }
+                pb::Event { event: Some(Delete(DeleteEvent { request_header: None, response_header })) }
             }
         }
     }
@@ -139,6 +122,7 @@ impl CharmServerImpl {
             }
         }
     }
+    
 }
 
 #[async_trait]
