@@ -1,6 +1,7 @@
 use crate::charm::config::CharmConfig;
 use crate::charm::server::run_server;
 use crate::charm::state_machine::CharmStateMachine;
+use crate::charm::CharmNodeInfo;
 use crate::raft::core::config::RaftConfigBuilder;
 use crate::raft::run_raft;
 use crate::raft::types::NodeId;
@@ -51,6 +52,10 @@ pub async fn run_charm_server(config: CharmServerConfig) {
         .other_nodes(other_nodes)
         .raft_log_storage_filename(config.raft_log_storage_filename)
         .raft_storage_filename(config.raft_storage_filename)
+        .node_info(CharmNodeInfo {
+            host: config.listen.host.clone(),
+            port: config.listen.charm_port,
+        })
         .build().unwrap();
     let charm_config = CharmConfig {
         listen: config.listen,

@@ -57,9 +57,11 @@ mod deterministic {
     pub static LAZY: LazyLock<DashMap<String, InMemStorage>> = LazyLock::new(|| DashMap::new());
 }
 
-pub async fn run_raft<S: StateMachine>(config: RaftConfig, state_machine: S, rng: CharmRng) -> RaftHandle<S::Request>
+pub async fn run_raft<S, I>(config: RaftConfig<I>, state_machine: S, rng: CharmRng) -> RaftHandle<S::Request>
 where
+    S: StateMachine<I>,
     S::Request: Serialize + DeserializeOwned + Send + Sync + 'static,
+    I: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     // Create storage files and directories if they don't exist.
     #[cfg(not(feature = "turmoil"))]

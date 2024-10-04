@@ -40,10 +40,6 @@ impl NodeId {
     #[must_use] pub fn to_string(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
-
-    #[must_use] pub fn to_addr(&self) -> String {
-        format!("http://{}:{}", self.host, self.port)
-    }
 }
 
 /// A command to be executed by the state machine.
@@ -53,14 +49,14 @@ pub struct Data(pub Vec<u8>);
 /// A log entry, containing a command to be executed and the term in which it was received.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogEntry {
-    pub leader_id: NodeId,
+    pub leader_info: Vec<u8>,
     pub term: Term,
     pub data: Data,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RaftInfo {
-    pub node_id: NodeId,
+pub struct RaftInfo<I> {
+    pub leader_info: I,
     pub term: Term,
     pub index: Index,
 }

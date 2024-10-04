@@ -110,8 +110,8 @@ struct Proposal<R> {
     commit_tx: oneshot::Sender<Result<(), RaftCoreError>>,
 }
 
-pub struct RaftNode<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> {
-    config: RaftConfig,
+pub struct RaftNode<R, S, I> {
+    config: RaftConfig<I>,
 
     /// The log of entries that this node has received.
     storage: S,
@@ -130,19 +130,19 @@ pub struct RaftNode<R: Serialize + DeserializeOwned + Send + 'static, S: CoreSto
 
     core_rx: UnboundedReceiver<CoreQueueEntry<R>>,
     outbound_network: OutboundNetworkHandle,
-    state_machine: StateMachineHandle<R>,
+    state_machine: StateMachineHandle<R, I>,
     proposals: BTreeMap<Index, Proposal<R>>,
     rng: CharmRng,
 }
 
-impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<R, S> {
+impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone + Serialize + DeserializeOwned> RaftNode<R, S, I> {
     #[must_use] pub fn new(
-        config: RaftConfig,
+        config: RaftConfig<I>,
         core_rx: UnboundedReceiver<CoreQueueEntry<R>>,
         storage: S,
         outbound_network: OutboundNetworkHandle,
-        state_machine: StateMachineHandle<R>,
-        mut rng: CharmRng) -> RaftNode<R, S> {
+        state_machine: StateMachineHandle<R, I>,
+        mut rng: CharmRng) -> RaftNode<R, S, I> {
         let follower_state = FollowerState {
             election_timer: sleep(config.get_election_timeout(&mut rng)).shared(),
             leader_id: None,
@@ -437,7 +437,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
                             warn!("Failed to send commit notification. Client request may already be gone.");
                         } else {
                             let raft_info = RaftInfo {
-                                node_id: self.node_id().clone(),
+                                leader_info: self.config.node_info.clone(),
                                 term: current_term,
                                 index: idx,
                             };
@@ -567,12 +567,13 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
             }
 
             Leader(_) => {
-                let serialized = serde_json::to_vec(&request).unwrap();
+                let serialized_data = serde_json::to_vec(&request).unwrap();
+                let serialized_leader_info = serde_json::to_vec(&self.config.node_info).unwrap();
                 let current_term = self.get_current_term().await;
                 let log_entry = LogEntry {
-                    leader_id: self.node_id().clone(),
+                    leader_info: serialized_leader_info,
                     term: current_term,
-                    data: Data(serialized),
+                    data: Data(serialized_data),
                 };
                 let index = self.get_log_storage().append(log_entry).await.unwrap();
                 debug!("Proposal appended to log at index {:?}.", index);
@@ -673,8 +674,9 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
             self.last_applied = self.last_applied.next();
             let entry = self.get_log_storage().get(self.last_applied).await.unwrap().unwrap();
             let req: R = serde_json::from_slice(&entry.data.0).unwrap();
+            let leader_info: I = serde_json::from_slice(&entry.leader_info).unwrap();
             let raft_info = RaftInfo {
-                node_id: entry.leader_id.clone(),
+                leader_info,
                 term: entry.term.clone(),
                 index: self.last_applied.clone(),
             };
@@ -729,11 +731,12 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage> RaftNode<
 }
 
 #[tracing::instrument(skip_all)]
-async fn run<R, S>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, storage: S, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, rng: CharmRng, span: Span)
+async fn run<R, S, I>(config: RaftConfig<I>, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, storage: S, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R, I>, rng: CharmRng, span: Span)
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
     S: CoreStorage + Send + Sync + 'static,
     S::LogStorage: Send + 'static,
+    I: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     async move {
         let mut node = RaftNode::new(config, core_rx, storage, outbound_network, state_machine, rng);
@@ -743,11 +746,12 @@ where
     }.instrument(span).await;
 }
 
-pub fn run_core<R, S>(config: RaftConfig, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, storage: S, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R>, rng: CharmRng)
+pub fn run_core<R, S, I>(config: RaftConfig<I>, core_rx: UnboundedReceiver<CoreQueueEntry<R>>, storage: S, outbound_network: OutboundNetworkHandle, state_machine: StateMachineHandle<R, I>, rng: CharmRng)
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
     S: CoreStorage + Send + Sync + 'static,
     S::LogStorage: Send + 'static,
+    I: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     let span = Span::current();
     spawn(run(config, core_rx, storage, outbound_network, state_machine, rng, span));

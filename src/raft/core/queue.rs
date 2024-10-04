@@ -4,7 +4,7 @@ use tokio::sync::oneshot;
 use tracing::Span;
 
 #[derive(Debug)]
-pub enum CoreQueueEntry<R: Send + 'static> {
+pub enum CoreQueueEntry<R> {
     AppendEntriesRequest {
         request: AppendEntriesRequest,
         response_tx: oneshot::Sender<AppendEntriesResponse>,

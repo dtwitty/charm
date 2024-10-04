@@ -180,7 +180,7 @@ pub mod tests {
         for header in &response_headers {
             assert!(header.raft_index > prev_index);
             assert!(header.raft_term >= prev_term);
-            assert_eq!(leader_for_term.entry(header.raft_term).or_insert(header.leader_id.clone()), &header.leader_id);
+            assert_eq!(leader_for_term.entry(header.raft_term).or_insert(header.leader_addr.clone()), &header.leader_addr);
             prev_index = header.raft_index;
             prev_term = header.raft_term;
         }

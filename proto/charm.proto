@@ -31,7 +31,7 @@ message ResponseHeader {
   // The node that processed this request. This might not be the same node that the client sent the request to, as
   // requests can be forwarded to the leader.
   // Clients may choose to redirect future requests to this node for better performance.
-  string leader_id = 1;
+  string leader_addr = 1;
 
   // The term of the leader that processed this request.
   // Useful for debugging and understanding the state of the cluster.

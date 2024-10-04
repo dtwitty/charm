@@ -2,10 +2,10 @@ use crate::charm::client::make_charm_client;
 use crate::charm::config::CharmConfig;
 use crate::charm::pb::charm_client::CharmClient;
 use crate::charm::pb::charm_server::{Charm, CharmServer};
-use crate::charm::pb::{DeleteRequest, DeleteResponse, GetRequest, GetResponse, PutRequest, PutResponse, ResponseHeader};
+use crate::charm::pb::{DeleteRequest, DeleteResponse, GetRequest, GetResponse, PutRequest, PutResponse, };
 use crate::charm::state_machine::CharmStateMachineRequest;
 use crate::raft::core::error::RaftCoreError::NotLeader;
-use crate::raft::types::{NodeId, RaftInfo};
+use crate::raft::types::{NodeId, };
 use crate::raft::RaftHandle;
 use crate::server::CharmPeer;
 use dashmap::DashMap;
@@ -56,25 +56,14 @@ impl CharmServerImpl {
             .ok_or(anyhow::anyhow!("no peer found for leader `{:?}`", leader))
     }
 
-    fn get_response_header(&self, raft_info: &RaftInfo) -> ResponseHeader {
-        let leader_peer = self.get_leader_peer(&raft_info.node_id).unwrap();
-        ResponseHeader {
-            leader_id: format!("{}:{}", leader_peer.host, leader_peer.charm_port),
-            raft_term: raft_info.term.0,
-            raft_index: raft_info.index.0,
-        }
-    }
-
-    async fn handle_request<RequestPb, ResponsePb, ToStateMachineRequest, StateMachineResponse, ToResponsePb, Forward, F>(
+    async fn handle_request<RequestPb, ResponsePb, ToStateMachineRequest, Forward, F>(
         &self,
         request_pb: RequestPb,
         to_state_machine_request: ToStateMachineRequest,
-        to_response_pb: ToResponsePb,
         forward: Forward) -> Result<Response<ResponsePb>, Status>
     where
         RequestPb: Clone,
-        ToStateMachineRequest: FnOnce(RequestPb, oneshot::Sender<StateMachineResponse>, Span) -> CharmStateMachineRequest,
-        ToResponsePb: FnOnce(StateMachineResponse) -> ResponsePb,
+        ToStateMachineRequest: FnOnce(RequestPb, oneshot::Sender<ResponsePb>, Span) -> CharmStateMachineRequest,
         Forward: FnOnce(CharmClient<Channel>, RequestPb) -> F,
         F: Future<Output=Result<Response<ResponsePb>, Status>>,
     {
@@ -84,8 +73,7 @@ impl CharmServerImpl {
         match commit {
             Ok(()) => {
                 // Great success!
-                let state_machine_response = rx.await.unwrap();
-                let response_pb = to_response_pb(state_machine_response);
+                let response_pb = rx.await.unwrap();
                 Ok(Response::new(response_pb))
             }
 
@@ -113,11 +101,7 @@ impl Charm for CharmServerImpl {
         debug!("GET: {:?}", request_pb);
         self.handle_request(
             request_pb,
-            |request_pb, tx, span| CharmStateMachineRequest::Get { key: request_pb.key, response: Some(tx), span: Some(span) },
-            |response| {
-                let response_header = Some(self.get_response_header(&response.raft_info));
-                GetResponse { response_header, value: response.value }
-            },
+            |request_pb, tx, span| CharmStateMachineRequest::Get { req: request_pb, response_tx: Some(tx), span: Some(span) },
             |mut client, req| async move { client.get(req).await }).await
     }
 
@@ -127,11 +111,7 @@ impl Charm for CharmServerImpl {
         debug!("PUT: {:?}", request_pb);
         self.handle_request(
             request_pb,
-            |request_pb, tx, span| CharmStateMachineRequest::Set { key: request_pb.key, value: request_pb.value, response: Some(tx), span: Some(span) },
-            |response| {
-                let response_header = Some(self.get_response_header(&response.raft_info));
-                PutResponse { response_header }
-            },
+            |request_pb, tx, span| CharmStateMachineRequest::Put { req: request_pb, response_tx: Some(tx), span: Some(span) },
             |mut client, req| async move { client.put(req).await }).await
     }
 
@@ -141,11 +121,7 @@ impl Charm for CharmServerImpl {
         debug!("DELETE: {:?}", request);
         self.handle_request(
             request,
-            |request_pb, tx, span| CharmStateMachineRequest::Delete { key: request_pb.key, response: Some(tx), span: Some(span) },
-            |response| {
-                let response_header = Some(self.get_response_header(&response.raft_info));
-                DeleteResponse { response_header }
-            },
+            |request_pb, tx, span| CharmStateMachineRequest::Delete { req: request_pb, response_tx: Some(tx), span: Some(span) },
             |mut client, req| async move { client.delete(req).await }).await
     }
 }

@@ -6,7 +6,7 @@ use derive_builder::Builder;
 use rand::Rng;
 
 #[derive(Debug, Clone, PartialEq, Builder)]
-pub struct RaftConfig {
+pub struct RaftConfig<I> {
     pub node_id: NodeId,
     pub other_nodes: Vec<NodeId>,
     pub raft_storage_filename: String,
@@ -20,9 +20,11 @@ pub struct RaftConfig {
 
     #[builder(default = "Duration::from_millis(50)")]
     pub heartbeat_interval: Duration,
+
+    pub node_info: I
 }
 
-impl RaftConfig {
+impl<I> RaftConfig<I> {
     pub fn get_election_timeout(&self, rng: &mut CharmRng) -> Duration {
         let election_timeout_min = self.election_timeout_min;
         let election_timeout_max = self.election_timeout_max;
