@@ -114,21 +114,6 @@ impl EasyCharmClient {
         }).await
     }
 
-    #[instrument(fields(addr=self.addr.clone()), skip_all)]
-    pub async fn history(&self, key: String) -> anyhow::Result<crate::charm::pb::HistoryResponse> {
-        debug!("Getting history for key: {}", key);
-        let retry_strategy = self.retry_strategy.clone();
-        Retry::spawn(retry_strategy, || async {
-            self.check_circuit_breaker()?;
-            let request_header = self.make_request_header();
-            let mut request = tonic::Request::new(crate::charm::pb::HistoryRequest { request_header, key: key.clone() });
-            request.set_timeout(Duration::from_secs(1));
-            let result = self.client.clone().history(request).await;
-            let response = self.instrument_response(result)?;
-            Ok(response)
-        }).await
-    }
-
     fn check_circuit_breaker(&self) -> anyhow::Result<()> {
         if !self.circuit_breaker.is_call_permitted() {
             return Err(anyhow::anyhow!("Circuit breaker is open"));
