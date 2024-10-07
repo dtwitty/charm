@@ -3,8 +3,9 @@ use crate::charm::pb::{ClientId, DeleteRequest, DeleteResponse, GetRequest, GetR
 use crate::charm::retry::{RetryStrategy, RetryStrategyBuilder, RetryStrategyIterator};
 use failsafe::failure_policy::{success_rate_over_time_window, SuccessRateOverTimeWindow};
 use failsafe::{Config, Instrument, StateMachine};
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_retry::Retry;
 use tonic::transport::Channel;
@@ -16,6 +17,7 @@ use uuid::Uuid;
 pub struct EasyCharmClient {
     client_id: Uuid,
     request_number: Arc<AtomicU64>,
+    outstanding_requests: Arc<Mutex<BTreeSet<u64>>>,
     addr: String,
     client: CharmClient<Channel>,
     retry_strategy: RetryStrategy,
@@ -59,9 +61,11 @@ impl EasyCharmClient {
             .build();
         let client_id = Uuid::new_v4();
         let request_number = Arc::new(AtomicU64::new(0));
+        let outstanding_requests = Arc::new(Mutex::new(BTreeSet::new()));
         Ok(EasyCharmClient {
             client_id,
             request_number,
+            outstanding_requests,
             addr,
             client,
             retry_strategy,
@@ -73,13 +77,15 @@ impl EasyCharmClient {
     pub async fn get(&self, key: String) -> anyhow::Result<GetResponse> {
         debug!("Getting key: {}", key);
         let retry_strategy = self.retry_strategy.clone();
+        let request_header = self.make_request_header();
+        let request_pb = GetRequest { request_header, key: key.clone() };
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;
-            let request_header = self.make_request_header();
-            let mut request = tonic::Request::new(GetRequest { request_header, key: key.clone() });
+            let mut request = tonic::Request::new(request_pb.clone());
             request.set_timeout(Duration::from_secs(1));
             let result = self.client.clone().get(request).await;
             let response = self.instrument_response(result)?;
+            self.on_success(request_header.unwrap().request_number);
             Ok(response)
         }).await
     }
@@ -88,13 +94,15 @@ impl EasyCharmClient {
     pub async fn put(&self, key: String, value: String) -> anyhow::Result<PutResponse> {
         debug!("Putting key: {} value: {}", key, value);
         let retry_strategy = self.retry_strategy.clone();
+        let request_header = self.make_request_header();
+        let request_pb = PutRequest { request_header, key: key.clone(), value: value.clone() };
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;
-            let request_header = self.make_request_header();
-            let mut request = tonic::Request::new(PutRequest { request_header, key: key.clone(), value: value.clone() });
+            let mut request = tonic::Request::new(request_pb.clone());
             request.set_timeout(Duration::from_secs(1));
             let result = self.client.clone().put(request).await;
             let response = self.instrument_response(result)?;
+            self.on_success(request_header.unwrap().request_number);
             Ok(response)
         }).await
     }
@@ -103,13 +111,15 @@ impl EasyCharmClient {
     pub async fn delete(&self, key: String) -> anyhow::Result<DeleteResponse> {
         debug!("Deleting key: {}", key);
         let retry_strategy = self.retry_strategy.clone();
+        let request_header = self.make_request_header();
+        let request_pb = DeleteRequest { request_header, key: key.clone() };
         Retry::spawn(retry_strategy, || async {
             self.check_circuit_breaker()?;
-            let request_header = self.make_request_header();
-            let mut request = tonic::Request::new(DeleteRequest { request_header, key: key.clone() });
+            let mut request = tonic::Request::new(request_pb.clone());
             request.set_timeout(Duration::from_secs(1));
             let result = self.client.clone().delete(request).await;
             let response = self.instrument_response(result)?;
+            self.on_success(request_header.unwrap().request_number);
             Ok(response)
         }).await
     }
@@ -135,18 +145,34 @@ impl EasyCharmClient {
     }
 
     fn make_request_header(&self) -> Option<RequestHeader> {
+        // Create the client ID.
         let (hi_bits, lo_bits) = self.client_id.as_u64_pair();
         let client_id = Some(ClientId {
             lo_bits,
             hi_bits,
         });
-        let request_number = self.request_number.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        // Give this request a unique number.
+        let request_number = self.request_number.fetch_add(1, Ordering::Relaxed);
+
+        // Add this request to the set of outstanding requests.
+        let mut m = self.outstanding_requests.lock().unwrap();
+        m.insert(request_number);
+
+        // Find the first incomplete request number.
+        let first_incomplete_request_number = m.iter().next().expect("This should certainly exist").clone();
 
         Some(RequestHeader {
             client_id,
             request_number,
-            first_incomplete_request_number: 0
+            first_incomplete_request_number,
         })
+    }
+
+    fn on_success(&self, request_number: u64) {
+        // Mark this request as complete.
+        let mut m = self.outstanding_requests.lock().unwrap();
+        m.remove(&request_number);
     }
 }
 

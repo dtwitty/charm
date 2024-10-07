@@ -14,7 +14,7 @@ pub struct RetryStrategy {
     max_delay: Duration,
 
     /// The total time spent on retries before giving up.
-    #[builder(default = "Duration::from_secs(5)")]
+    #[builder(default = "Duration::MAX")]
     total_retry_time: Duration,
 
     /// The factor to multiply the delay by after each retry.
