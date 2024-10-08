@@ -9,6 +9,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tonic::transport::{Channel, Endpoint};
 use tonic::Request;
 use tracing::warn;
+use crate::net::connector;
 
 pub enum RaftRequest {
     AppendEntries(AppendEntriesRequest),
@@ -109,7 +110,7 @@ async fn create_client(node_id: NodeId) -> Result<RaftClient<Channel>, tonic::tr
     let channel = endpoint.connect_lazy();
 
     #[cfg(feature = "turmoil")]
-    let channel = endpoint.connect_with_connector_lazy(crate::net::connector::TurmoilTcpConnector);
+    let channel = endpoint.connect_with_connector_lazy(connector::connector());
 
     Ok(RaftClient::new(channel))
 }

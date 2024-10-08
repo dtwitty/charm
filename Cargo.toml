@@ -12,39 +12,40 @@ name = "charm"
 path = "src/lib.rs"
 
 [dependencies]
-anyhow = { version = "1.0.86", features = ["backtrace"] }
-async-stream = "0.3.5"
-clap = { version = "4.5.16", features = ["derive"] }
+anyhow = { version = "1.0.89", features = ["backtrace"] }
+async-stream = "0.3.6"
+clap = { version = "4.5.19", features = ["derive"] }
 dashmap = "6.1.0"
 derive_builder = "0.20.1"
 failsafe = "1.3.0"
-futures = "0.3.30"
+futures = "0.3.31"
 humantime = "2.1.0"
 itertools = "0.13.0"
-prost = "0.13.1"
+prost = "0.13.3"
 rand = "0.8.5"
-serde = { version = "1.0.209", features = ["derive"] }
-serde_json = "1.0.127"
+serde = { version = "1.0.210", features = ["derive"] }
+serde_json = "1.0.128"
 tokio = { version = "1.40.0", features = ["full"] }
 tokio-retry = "0.3.0"
 tokio-stream = "0.1.16"
-tonic = "0.12.2"
-tower = { version = "0.5.0", features = ["full"] }
+tonic = "0.12.3"
+tower = { version = "0.5.1", features = ["full"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 turmoil = { version = "0.6.3", optional = true }
 wyrand = "0.2.1"
 hyper = "1.4.1"
-hyper-util = { version = "0.1.7", features = ["full"] }
+hyper-util = { version = "0.1.9", features = ["full"] }
 sqlx = { version = "0.8.2", features = ["runtime-tokio", "sqlite", "derive", "macros"] }
-tempfile = "3.12.0"
 uuid = { version = "1.10.0", features = ["v4"] }
+rand_distr = "0.4.3"
 
 [dev-dependencies]
-turmoil = "0.6.3"
+stateright = "0.30.2"
+tempfile = "3.13.0"
 
 [build-dependencies]
-tonic-build = "0.12.2"
+tonic-build = "0.12.3"
 
 [features]
 turmoil = ["dep:turmoil"]

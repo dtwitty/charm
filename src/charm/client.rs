@@ -1,6 +1,7 @@
 use crate::charm::pb::charm_client::CharmClient;
 use crate::charm::pb::{ClientId, DeleteRequest, DeleteResponse, GetRequest, GetResponse, PutRequest, PutResponse, RequestHeader};
 use crate::charm::retry::{RetryStrategy, RetryStrategyBuilder, RetryStrategyIterator};
+use crate::net::connector;
 use failsafe::failure_policy::{success_rate_over_time_window, SuccessRateOverTimeWindow};
 use failsafe::{Config, Instrument, StateMachine};
 use std::collections::BTreeSet;
@@ -52,9 +53,9 @@ impl EasyCharmClient {
         let backoff = RetryStrategyBuilder::default()
             .rng(retry_strategy.clone_rng())
             .initial_delay(Duration::from_secs(1))
-            .max_delay(Duration::from_secs(10))
+            .max_delay(Duration::from_secs(3))
             .build()?;
-        let failure_policy = success_rate_over_time_window(0.9, 20, window, backoff.into_iter());
+        let failure_policy = success_rate_over_time_window(0.1, 1000, window, backoff.into_iter());
         let circuit_breaker = Config::new()
             .failure_policy(failure_policy)
             .instrument(CircuitBreakerInstrument {})
@@ -182,7 +183,7 @@ pub fn make_charm_client(addr: String) -> anyhow::Result<CharmClient<Channel>> {
     let channel = endpoint.connect_lazy();
 
     #[cfg(feature = "turmoil")]
-    let channel = endpoint.connect_with_connector_lazy(crate::net::connector::TurmoilTcpConnector);
+    let channel = endpoint.connect_with_connector_lazy(connector::connector());
 
     Ok(CharmClient::new(channel))
 }

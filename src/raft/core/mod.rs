@@ -308,7 +308,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
 
         if let Candidate(_) = self.role {
             // Someone else in the same term became a leader before us.
-            info!("Another node {:?} while we were a candidate became leader. Converting to follower.", req.leader_id);
+            info!("Another node {:?} became the leader while we were a candidate. Converting to follower.", req.leader_id);
             self.convert_to_follower().await;
         }
 
@@ -336,14 +336,15 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         let prev_log_entry = self.get_log_storage().get(req.prev_log_index).await.unwrap();
         if prev_log_entry.is_none() {
             // We don't have the previous log entry.
-            warn!("Append request claimed log index {:?} but we don't have that entry. Failing request.", req.prev_log_index);
+            let last_index = self.get_log_storage().last_index().await.unwrap();
+            warn!("Append request claimed log index {:?}, but we only have up to index {:?}.", req.prev_log_index, last_index);
             return self.append_entries_response(false).await;
         }
 
         let prev_log_term = prev_log_entry.unwrap().term;
         if prev_log_term != req.prev_log_term {
             // The previous log term doesn't match.
-            warn!("Previous log term doesn't match. Failing request.");
+            warn!("Request said previous log term at index {:?} was {:?}, but we have {:?}. Rejecting request.", req.prev_log_index, req.prev_log_term, prev_log_term);
             return self.append_entries_response(false).await;
         }
 
@@ -368,7 +369,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             if let Some(prev_entry) = self.get_log_storage().get(prev_log_index).await.unwrap() {
                 if prev_entry.term != entry.term {
                     // There is a conflict. Truncate the log and append the new entry.
-                    warn!("Log conflict detected at index {:?}. Truncating log.", prev_log_index);
+                    warn!("Log conflict detected at index {:?}. Request has term {:?} but we have term {:?}. Truncating log.", prev_log_index, entry.term, prev_entry.term);
                     self.get_log_storage().truncate(prev_log_index).await.unwrap();
                     // Fail the futures that got truncated.
                     let to_fail = self.proposals.split_off(&prev_log_index);
@@ -394,7 +395,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             node_id: self.node_id().clone(),
             term: self.get_current_term().await,
             success,
-            last_log_index: self.get_log_storage().last_index().await.unwrap(),
+            last_log_index: self.commit_index.prev(),
         }
     }
 
@@ -407,7 +408,6 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             // We are not the leader. Don't care.
             debug!("Not the leader. Ignoring response.");
         }
-
 
         let last_index = self.get_log_storage().last_index().await.unwrap();
         let current_term = self.get_current_term().await;
@@ -447,7 +447,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
                 }
             } else {
                 // The AppendEntriesRequest failed. Decrement the next_index. We will retry later.
-                debug!("Request failed. Decrementing next_index.");
+                warn!("Request failed. Node {:?} claims it has up to index {:?}.", res.node_id, res.last_log_index);
                 let peer_state = leader_state.get_mut_peer_state(&res.node_id);
                 peer_state.next_index = res.last_log_index.next();
             }
@@ -464,7 +464,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         let current_term = self.get_current_term().await;
         if req.term < current_term {
             // This candidate is out of date.
-            info!("Candidate has older term. Failing vote request.");
+            warn!("Candidate {:?} has term {:?}, but we already have term {:?}. Failing vote request.", req.candidate_id, req.term, current_term);
             return self.request_vote_response(false).await;
         }
 
@@ -475,7 +475,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         };
         if !can_vote {
             // We already voted for someone else.
-            info!("Already voted for another candidate. Failing vote request.");
+            info!("Cannot vote for candidate {:?} because we already voted for {:?}. Failing vote request.", req.candidate_id, voted_for);
             return self.request_vote_response(false).await;
         }
 
@@ -484,7 +484,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         let candidate_last_log_term = req.last_log_term;
         if candidate_last_log_term > our_last_log_term {
             // The candidate has a higher term, so we approve!
-            info!("Candidate has higher term. Voting for candidate {:?}.", req.candidate_id);
+            info!("Voting for candidate {:?} because it has term {:?} and we only have term {:?}.", req.candidate_id, candidate_last_log_term, our_last_log_term);
             self.vote_for(&req.candidate_id).await;
             return self.request_vote_response(true).await;
         }
@@ -494,13 +494,13 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         let candidate_last_log_index = req.last_log_index;
         if candidate_last_log_index >= our_last_log_index {
             // The candidate has at least as much log as we do, so we approve!
-            info!("Candidate has at least as much log as we do. Voting for candidate {:?}.", req.candidate_id);
+            info!("Voting for candidate {:?} because it has last index {:?} and we have index {:?}.", req.candidate_id, candidate_last_log_index, our_last_log_index);
             self.vote_for(&req.candidate_id).await;
             return self.request_vote_response(true).await;
         }
 
         // If we get here, the candidate's log is shorter than ours.
-        info!("Candidate has shorter log. Failing vote request.");
+        info!("Not voting for candidate {:?} because it has last index {:?} and we have index {:?}.", req.candidate_id, candidate_last_log_index, our_last_log_index);
         self.request_vote_response(false).await
     }
 
@@ -534,14 +534,14 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
 
                     let total_nodes = self.config.other_nodes.len() + 1;
                     let majority = total_nodes / 2 + 1;
-                    debug!("Vote granted by {:?}. We now have {:?} out of {:?} needed votes", res.node_id, state.votes_received, majority);
+                    info!("Vote granted by {:?}. We now have {:?} out of {:?} needed votes", res.node_id, state.votes_received, majority);
                     if state.votes_received >= majority as u64 && !self.role.is_leader() {
                         // Great success!
                         self.become_leader().await;
                     }
                 } else {
                     // The vote was not granted, just log it.
-                    debug!("Vote not granted by {:?}.", res.node_id);
+                    info!("Vote not granted by {:?}.", res.node_id);
                 }
             }
 
