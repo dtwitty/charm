@@ -71,7 +71,7 @@ impl Iterator for RetryStrategyIterator {
         let delay = self.strategy.apply_jitter(self.current).min(self.strategy.max_delay);
 
         // Exponential backoff.
-        self.current = self.current.mul_f64(self.strategy.factor);
+        self.current = self.current.mul_f64(self.strategy.factor).min(self.strategy.max_delay);
 
         // Cap the total time spent on retries.
         if self.so_far + delay >= self.strategy.total_retry_time {

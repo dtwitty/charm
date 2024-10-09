@@ -4,8 +4,8 @@ use crate::charm::pb::charm_client::CharmClient;
 use crate::charm::pb::charm_server::{Charm, CharmServer};
 use crate::charm::pb::{DeleteRequest, DeleteResponse, GetRequest, GetResponse, PutRequest, PutResponse, };
 use crate::charm::state_machine::CharmStateMachineRequest;
-use crate::raft::core::error::RaftCoreError::NotLeader;
-use crate::raft::types::{NodeId, };
+use crate::raft::core::error::RaftCoreError::{NotLeader, NotReady};
+use crate::raft::types::NodeId;
 use crate::raft::RaftHandle;
 use crate::server::CharmPeer;
 use dashmap::DashMap;
@@ -69,12 +69,18 @@ impl CharmServerImpl {
     {
         let (tx, rx) = oneshot::channel();
         let proposal = to_state_machine_request(request_pb.clone(), tx, Span::current());
-        let commit = self.raft_handle.propose(proposal).await.unwrap();
+        let commit = self.raft_handle.propose(proposal).await;
         match commit {
             Ok(()) => {
-                // Great success!
-                let response_pb = rx.await.unwrap();
-                Ok(Response::new(response_pb))
+                // We got the commit! Now we wait for the state machine to respond.
+                match rx.await {
+                    Ok(response_pb) => {
+                        Ok(Response::new(response_pb))
+                    }
+                    Err(_) => {
+                        Err(Status::internal("state machine response channel closed".to_string()))
+                    }
+                }
             }
 
             Err(NotLeader { leader_id: Some(leader) }) => {
@@ -88,6 +94,12 @@ impl CharmServerImpl {
                 debug!("Not the leader and don't know who is");
                 Err(Status::unavailable("not the leader and don't know who is".to_string()))
             }
+
+            Err(NotReady) => {
+                debug!("Raft not ready");
+                Err(Status::unavailable("raft not ready".to_string()))
+            }
+            
         }
     }
     

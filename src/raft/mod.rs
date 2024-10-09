@@ -1,7 +1,10 @@
+use self::core::node::run_core;
 use crate::raft::core::config::RaftConfig;
 use crate::raft::core::error::RaftCoreError;
+use crate::raft::core::error::RaftCoreError::NotReady;
 use crate::raft::core::handle::RaftCoreHandle;
-use self::core::node::run_core;
+#[cfg(not(feature = "turmoil"))]
+use crate::raft::core::storage::sqlite::SqliteCoreStorage;
 use crate::raft::network::inbound_network::run_inbound_network;
 use crate::raft::network::outbound_network::{run_outbound_network, OutboundNetworkHandle};
 use crate::raft::state_machine::{run_state_machine_driver, StateMachine, StateMachineHandle};
@@ -9,10 +12,6 @@ use crate::rng::CharmRng;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::sync::mpsc::unbounded_channel;
-use tokio::sync::oneshot;
-
-#[cfg(not(feature = "turmoil"))]
-use crate::raft::core::storage::sqlite::SqliteCoreStorage;
 
 #[cfg(feature = "turmoil")]
 use crate::raft::core::storage::in_mem::InMemStorage;
@@ -43,8 +42,11 @@ impl<R: Send + 'static> RaftHandle<R> {
     /// committed. Note that this does not mean the proposal has been applied
     /// to the state machine. It is up to the caller to pass their own method of handle
     /// the result of the proposal being applied to the state machine.
-    pub fn propose(&self, proposal: R) -> oneshot::Receiver<Result<(), RaftCoreError>> {
-        self.core_handle.propose(proposal)
+    pub async fn propose(&self, proposal: R) -> Result<(), RaftCoreError> {
+        match self.core_handle.propose(proposal).await {
+            Ok(_) => Ok(()),
+            Err(_) => Err(NotReady),
+        }
     }
 }
 
