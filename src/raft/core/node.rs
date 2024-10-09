@@ -1,18 +1,6 @@
-use futures::future::Shared;
-use tokio::time::{sleep, Sleep};
-use std::collections::{BTreeMap, HashMap};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-use tokio::sync::mpsc::UnboundedReceiver;
-use tracing::{debug, error, info, trace, warn, Instrument, Span};
-use tokio::{select, spawn};
-use std::mem::swap;
-use tokio::sync::oneshot;
-use std::time::Duration;
-use futures::FutureExt;
 use crate::raft::core::config::RaftConfig;
-use crate::raft::core::node::Role::{Candidate, Follower, Leader};
 use crate::raft::core::error::RaftCoreError;
+use crate::raft::core::node::Role::{Candidate, Follower, Leader};
 use crate::raft::core::queue::CoreQueueEntry;
 use crate::raft::core::storage::{CoreStorage, LogStorage};
 use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, RequestVoteRequest, RequestVoteResponse};
@@ -20,6 +8,18 @@ use crate::raft::network::outbound_network::OutboundNetworkHandle;
 use crate::raft::state_machine::StateMachineHandle;
 use crate::raft::types::{Data, Index, LogEntry, NodeId, RaftInfo, Term};
 use crate::rng::CharmRng;
+use futures::future::Shared;
+use futures::FutureExt;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use std::collections::{BTreeMap, HashMap};
+use std::mem::swap;
+use std::time::Duration;
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::oneshot;
+use tokio::time::{sleep, Sleep};
+use tokio::{select, spawn};
+use tracing::{debug, error, info, trace, warn, Instrument, Span};
 
 struct FollowerState {
     /// The timer that will fire when the election timeout is reached.
@@ -367,9 +367,12 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
                     // Fail the futures that got truncated.
                     let to_fail = self.proposals.split_off(&prev_log_index);
                     for (_, proposal) in to_fail {
-                        proposal.commit_tx.send(Err(RaftCoreError::NotLeader {
+                        let r = proposal.commit_tx.send(Err(RaftCoreError::NotLeader {
                             leader_id: Some(leader_id.clone()),
-                        })).unwrap();
+                        }));
+                        if r.is_err() {
+                            warn!("Failed to send commit notification. Client request may already be gone.");
+                        }
                     }
 
                     self.get_log_storage().append(entry).await.unwrap();
@@ -425,17 +428,17 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
 
                     // Complete the futures, and send them to the state machine.
                     for (idx, proposal) in to_complete {
-                        let send_commit = proposal.commit_tx.send(Ok(()));
-                        if send_commit.is_err() {
+                        let r = proposal.commit_tx.send(Ok(()));
+                        if r.is_err() {
                             warn!("Failed to send commit notification. Client request may already be gone.");
-                        } else {
+                            return;
+                        } 
                             let raft_info = RaftInfo {
                                 leader_info: self.config.node_info.clone(),
                                 term: current_term,
                                 index: idx,
                             };
                             self.state_machine.apply(proposal.req, raft_info);
-                        }
                     }
                 }
             } else {
@@ -550,13 +553,19 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             Candidate(_) => {
                 debug!("Not the leader, but a candidate. Failing proposal.");
                 let res = Err(RaftCoreError::NotLeader { leader_id: None });
-                commit_tx.send(res).unwrap();
+                let r = commit_tx.send(res);
+                if r.is_err() {
+                    warn!("Failed to send commit notification. Client request may already be gone.");
+                }
             }
 
             Follower(ref follower_state) => {
                 debug!("Not the leader, but a follower. Failing proposal.");
                 let res = Err(RaftCoreError::NotLeader { leader_id: follower_state.leader_id.clone() });
-                commit_tx.send(res).unwrap();
+                let r = commit_tx.send(res);
+                if r.is_err() {
+                    warn!("Failed to send commit notification. Client request may already be gone.");
+                }
             }
 
             Leader(_) => {

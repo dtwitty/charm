@@ -45,7 +45,7 @@ pub mod tests {
             .min_message_latency(Duration::from_millis(1))
             .max_message_latency(Duration::from_millis(50))
             .enable_random_order()
-            .tcp_capacity(512)
+            .tcp_capacity(1024)
             .build_with_rng(Box::new(WyRand::new(seed)));
 
         // The rest are seeded deterministically but differently for each node and client.
@@ -62,18 +62,17 @@ pub mod tests {
             sim.client(client_name.clone(), run_client(c, seed_gen.next_u64(), history.clone()));
         }
 
-        //let mut crash_rng = WyRand::new(seed_gen.next_u64());
-        //let mut next_crash = random_duration(&mut crash_rng, Duration::from_secs(20), Duration::from_secs(1));
-        //let mut restarts = HashMap::new();
+        let mut crash_rng = WyRand::new(seed_gen.next_u64());
+        let mut next_crash = random_duration(&mut crash_rng, Duration::from_secs(10), Duration::from_secs(1));
+        let mut restarts = HashMap::new();
         while !sim.step()? {
-            /*
             let elapsed = sim.elapsed();
             if elapsed >= next_crash {
-                next_crash += random_duration(&mut crash_rng, Duration::from_secs(20), Duration::from_secs(1));
+                next_crash += random_duration(&mut crash_rng, Duration::from_secs(10), Duration::from_secs(5));
                 let host = format!("host{}", crash_rng.next_u64() % 3);
                 warn!("crashing {host}");
                 sim.crash(host.clone());
-                let restart_in = random_duration(&mut crash_rng, Duration::from_secs(3), Duration::from_secs(1));
+                let restart_in = random_duration(&mut crash_rng, Duration::from_secs(5), Duration::from_secs(1));
                 let restart_time = elapsed + restart_in;
                 restarts.insert(host, restart_time);
             }
@@ -84,7 +83,6 @@ pub mod tests {
                     restarts.remove(&host);
                 }
             }
-             */
         }
 
         // Check that the history is linearizable.
@@ -121,7 +119,7 @@ pub mod tests {
         let host = format!("host{}", client_rng.next_u64() % 3);
         let client = EasyCharmClient::new(format!("http://{host}:12345"), retry_strategy)?;
 
-        for _ in 0..10 {
+        for _ in 0..30 {
             let i = client_rng.next_u64() % 3;
             let key = format!("key{}", client_rng.next_u64() % 1);
             match i {
