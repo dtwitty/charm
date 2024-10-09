@@ -1,7 +1,6 @@
 use crate::charm::pb::charm_client::CharmClient;
 use crate::charm::pb::{ClientId, DeleteRequest, DeleteResponse, GetRequest, GetResponse, PutRequest, PutResponse, RequestHeader};
 use crate::charm::retry::{RetryStrategy, RetryStrategyBuilder, RetryStrategyIterator};
-use crate::net::connector;
 use failsafe::failure_policy::{success_rate_over_time_window, SuccessRateOverTimeWindow};
 use failsafe::{Config, Instrument, StateMachine};
 use std::collections::BTreeSet;
@@ -161,7 +160,7 @@ impl EasyCharmClient {
         m.insert(request_number);
 
         // Find the first incomplete request number.
-        let first_incomplete_request_number = m.iter().next().expect("This should certainly exist").clone();
+        let first_incomplete_request_number = *m.iter().next().expect("This should certainly exist");
 
         Some(RequestHeader {
             client_id,
@@ -183,7 +182,7 @@ pub fn make_charm_client(addr: String) -> anyhow::Result<CharmClient<Channel>> {
     let channel = endpoint.connect_lazy();
 
     #[cfg(feature = "turmoil")]
-    let channel = endpoint.connect_with_connector_lazy(connector::connector());
+    let channel = endpoint.connect_with_connector_lazy(crate::net::connector::connector());
 
     Ok(CharmClient::new(channel))
 }

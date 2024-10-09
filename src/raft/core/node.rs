@@ -11,7 +11,7 @@ use tokio::sync::oneshot;
 use std::time::Duration;
 use futures::FutureExt;
 use crate::raft::core::config::RaftConfig;
-use crate::raft::core::core::Role::{Candidate, Follower, Leader};
+use crate::raft::core::node::Role::{Candidate, Follower, Leader};
 use crate::raft::core::error::RaftCoreError;
 use crate::raft::core::queue::CoreQueueEntry;
 use crate::raft::core::storage::{CoreStorage, LogStorage};
@@ -670,8 +670,8 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             let leader_info: I = serde_json::from_slice(&entry.leader_info).unwrap();
             let raft_info = RaftInfo {
                 leader_info,
-                term: entry.term.clone(),
-                index: self.last_applied.clone(),
+                term: entry.term,
+                index: self.last_applied,
             };
             self.state_machine.apply(req, raft_info);
         }

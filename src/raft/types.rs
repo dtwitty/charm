@@ -36,12 +36,6 @@ pub struct NodeId {
     pub port: u16,
 }
 
-impl NodeId {
-    #[must_use] pub fn to_string(&self) -> String {
-        format!("{}:{}", self.host, self.port)
-    }
-}
-
 /// A command to be executed by the state machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Data(pub Vec<u8>);

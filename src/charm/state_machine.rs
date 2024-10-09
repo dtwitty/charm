@@ -54,6 +54,12 @@ pub struct CharmStateMachine {
     response_cache: HashMap<Uuid, PerClientCache>,
 }
 
+impl Default for CharmStateMachine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CharmStateMachine {
     #[must_use] pub fn new() -> CharmStateMachine {
         CharmStateMachine {

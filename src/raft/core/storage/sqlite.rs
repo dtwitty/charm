@@ -307,5 +307,5 @@ fn create_file_with_dirs<P: AsRef<Path>>(path: P) {
         fs::create_dir_all(parent).unwrap();
     }
     // Create the file (or open if it exists)
-    OpenOptions::new().create(true).write(true).open(path).unwrap();
+    OpenOptions::new().create(true).truncate(true).write(true).open(path).unwrap();
 }

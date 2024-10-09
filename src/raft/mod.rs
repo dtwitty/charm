@@ -1,7 +1,7 @@
 use crate::raft::core::config::RaftConfig;
 use crate::raft::core::error::RaftCoreError;
 use crate::raft::core::handle::RaftCoreHandle;
-use self::core::core::run_core;
+use self::core::node::run_core;
 use crate::raft::network::inbound_network::run_inbound_network;
 use crate::raft::network::outbound_network::{run_outbound_network, OutboundNetworkHandle};
 use crate::raft::state_machine::{run_state_machine_driver, StateMachine, StateMachineHandle};

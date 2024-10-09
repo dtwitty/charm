@@ -69,6 +69,7 @@ mod incoming {
     }
 }
 
+#[cfg(feature = "turmoil")]
 pub mod connector {
     use std::{future::Future, pin::Pin};
 

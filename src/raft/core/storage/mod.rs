@@ -56,22 +56,16 @@ pub trait CoreStorage {
 #[cfg(test)]
 pub mod test {
     use crate::raft::core::storage::LogStorage;
-    use crate::raft::types::{Data, Index, LogEntry, NodeId, Term};
+    use crate::raft::types::{Data, Index, LogEntry, Term};
 
     pub async fn test_log_storage<L: LogStorage>(storage: L) {
         let entry1 = LogEntry {
-            leader_id: NodeId {
-                host: "node1".to_string(),
-                port: 1234,
-            },
+            leader_info: "node1".into(),
             term: Term(1),
             data: Data(b"hello".to_vec()),
         };
         let entry2 = LogEntry {
-            leader_id: NodeId {
-                host: "node2".to_string(),
-                port: 5678,
-            },
+            leader_info: "node2".into(),
             term: Term(1),
             data: Data(b"world".to_vec()),
         };

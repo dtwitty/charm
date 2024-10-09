@@ -8,6 +8,12 @@ pub struct InMemLogStorage {
     entries: Arc<RwLock<Vec<LogEntry>>>,
 }
 
+impl Default for InMemLogStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InMemLogStorage {
     pub fn new() -> Self {
         InMemLogStorage {
@@ -111,6 +117,12 @@ struct InMemStorageInner {
 pub struct InMemStorage {
     log_storage: InMemLogStorage,
     inner: Arc<RwLock<InMemStorageInner>>,
+}
+
+impl Default for InMemStorage {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl InMemStorage {
