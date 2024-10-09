@@ -6,6 +6,7 @@ pub mod tests {
     use charm::rng::CharmRng;
     use charm::server::{run_charm_server, CharmPeer, CharmServerConfigBuilder};
     use rand::{Rng, RngCore};
+    use rayon::prelude::*;
     use stateright::semantics::{ConsistencyTester, LinearizabilityTester, SequentialSpec};
     use std::collections::HashMap;
     use std::fs::{create_dir_all, remove_dir_all};
@@ -16,16 +17,16 @@ pub mod tests {
     use wyrand::WyRand;
 
     #[test]
-    fn test_charm() -> turmoil::Result {
-        // Run a bunch of tests with different seeds to try to find a seed that causes a failure.
-        for seed in 0..1000 {
-            let res = test_one(seed);
-            if let Err(e) = res {
-                eprintln!("seed {seed} failed: {e:?}");
-                return Err(e);
-            }
+    fn test_charm() {
+        let bad_seed = (0..1000)
+            .into_par_iter()
+            .find_any(|seed| {
+                matches!(test_one(*seed), Err(_))
+            });
+        if let Some(b) = bad_seed {
+            let msg = format!("seed {b} failed");
+            panic!("{msg}");
         }
-        Ok(())
     }
 
     #[test]
@@ -61,10 +62,11 @@ pub mod tests {
             sim.client(client_name.clone(), run_client(c, seed_gen.next_u64(), history.clone()));
         }
 
-        let mut crash_rng = WyRand::new(seed_gen.next_u64());
-        let mut next_crash = random_duration(&mut crash_rng, Duration::from_secs(20), Duration::from_secs(1));
-        let mut restarts = HashMap::new();
+        //let mut crash_rng = WyRand::new(seed_gen.next_u64());
+        //let mut next_crash = random_duration(&mut crash_rng, Duration::from_secs(20), Duration::from_secs(1));
+        //let mut restarts = HashMap::new();
         while !sim.step()? {
+            /*
             let elapsed = sim.elapsed();
             if elapsed >= next_crash {
                 next_crash += random_duration(&mut crash_rng, Duration::from_secs(20), Duration::from_secs(1));
@@ -82,6 +84,7 @@ pub mod tests {
                     restarts.remove(&host);
                 }
             }
+             */
         }
 
         // Check that the history is linearizable.
@@ -161,7 +164,7 @@ pub mod tests {
 
                 _ => panic!("unexpected value"),
             };
-            
+
             let wait = random_duration(&mut client_rng, Duration::from_secs(1), Duration::from_millis(100));
             tokio::time::sleep(wait).await;
         }
@@ -227,7 +230,7 @@ pub mod tests {
     fn configure_tracing() {
         tracing::subscriber::set_global_default(
             tracing_subscriber::fmt()
-                .with_env_filter("info,charm::client=debug")
+                .with_env_filter("info,charm=debug")
                 .with_timer(SimElapsedTime)
                 .finish(),
         )

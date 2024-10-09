@@ -395,7 +395,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             node_id: self.node_id().clone(),
             term: self.get_current_term().await,
             success,
-            last_log_index: self.commit_index.prev(),
+            last_log_index: self.get_log_storage().last_index().await.unwrap(),
         }
     }
 
@@ -449,7 +449,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
                 // The AppendEntriesRequest failed. Decrement the next_index. We will retry later.
                 warn!("Request failed. Node {:?} claims it has up to index {:?}.", res.node_id, res.last_log_index);
                 let peer_state = leader_state.get_mut_peer_state(&res.node_id);
-                peer_state.next_index = res.last_log_index.next();
+                peer_state.next_index = peer_state.next_index.prev();
             }
         }
     }
