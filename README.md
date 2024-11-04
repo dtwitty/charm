@@ -5,6 +5,7 @@ It is built on top of the Raft consensus algorithm and is written in Rust.
 
 ## Features
 - Linearizable reads and writes
+- Idempotent writes (exactly-once semantics)
 - Fault-tolerant for up to `n/2 - 1` failures
 - Automated leader election, with requests forwarded to the leader
 

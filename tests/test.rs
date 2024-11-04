@@ -1,18 +1,17 @@
+mod linearizability;
 #[cfg(feature = "turmoil")]
 pub mod tests {
+    use crate::linearizability::{CharmHistory, CharmReq, CharmResp, ClientHistory};
     use charm::charm::client::EasyCharmClient;
-    use charm::charm::pb::{DeleteResponse, GetResponse, PutResponse, ResponseHeader};
     use charm::charm::retry::RetryStrategyBuilder;
     use charm::rng::CharmRng;
     use charm::server::{run_charm_server, CharmPeer, CharmServerConfigBuilder};
     use rand::{Rng, RngCore};
     use rayon::prelude::*;
-    use stateright::semantics::{ConsistencyTester, LinearizabilityTester, SequentialSpec};
     use std::collections::HashMap;
     use std::fs::{create_dir_all, remove_dir_all};
-    use std::sync::{Arc, Mutex};
     use std::time::Duration;
-    use tracing::{info, warn};
+    use tracing::{info, warn, Level};
     use turmoil::Sim;
     use wyrand::WyRand;
 
@@ -54,12 +53,13 @@ pub mod tests {
         // Run a cluster of 3 nodes.
         run_cluster(seed, &mut sim, &mut seed_gen, 3);
 
-        let history = Arc::new(Mutex::new(LinearizabilityTester::new(CharmSpec::new())));
+        let history = CharmHistory::new();
 
         // Run 3 clients...
         for c in 0..3 {
             let client_name = format!("client{c}");
-            sim.client(client_name.clone(), run_client(c, seed_gen.next_u64(), history.clone()));
+            let client_history = history.client_history(c);
+            sim.client(client_name, run_client(seed_gen.next_u64(), client_history));
         }
 
         let mut crash_rng = WyRand::new(seed_gen.next_u64());
@@ -86,16 +86,16 @@ pub mod tests {
         }
 
         // Check that the history is linearizable.
-        let history = history.lock().unwrap();
-        let serialized = history.serialized_history().ok_or(
+        let serialized = history.linearize().ok_or(
             anyhow::Error::msg("history is not linearizable".to_string())
         )?;
 
         // Print the history:
-        serialized.iter().for_each(|(req, resp)| {
-            info!("{req:?} -> {resp:?}");
-        });
-
+        if tracing::enabled!(Level::INFO) {
+            serialized.iter().for_each(|(req, resp)| {
+                info!("{req:?} -> {resp:?}");
+            });
+        }
 
         Ok(())
     }
@@ -109,7 +109,7 @@ pub mod tests {
         Duration::from_millis(millis as u64).max(Duration::ZERO)
     }
 
-    async fn run_client(client_num: u64, client_seed: u64, history: Arc<Mutex<LinearizabilityTester<u64, CharmSpec>>>) -> turmoil::Result {
+    async fn run_client(client_seed: u64, history: ClientHistory) -> turmoil::Result {
         let mut client_rng = WyRand::new(client_seed);
         let retry_strategy = RetryStrategyBuilder::default()
             .rng(CharmRng::new(client_seed))
@@ -124,40 +124,28 @@ pub mod tests {
             let key = format!("key{}", client_rng.next_u64() % 1);
             match i {
                 0 => {
-                    {
-                        history.lock().unwrap().on_invoke(client_num, CharmReq::Get(key.clone())).expect("valid");
-                    }
+                    history.on_invoke(CharmReq::Get(key.clone()));
                     info!("get {key}");
                     let resp = client.get(key.clone()).await?;
                     info!("get {key} -> {resp:?}");
-                    {
-                        history.lock().unwrap().on_return(client_num, CharmResp::Get(resp)).expect("valid");
-                    }
+                    history.on_return(CharmResp::Get(resp));
                 }
 
                 1 => {
                     let value = format!("value{}", client_rng.next_u64() % 3);
-                    {
-                        history.lock().unwrap().on_invoke(client_num, CharmReq::Put(key.clone(), value.clone())).expect("valid");
-                    }
+                    history.on_invoke(CharmReq::Put(key.clone(), value.clone()));
                     info!("put {key} -> {value}");
                     let resp = client.put(key.clone(), value.clone()).await?;
                     info!("put {key} -> {value} -> {resp:?}");
-                    {
-                        history.lock().unwrap().on_return(client_num, CharmResp::Put(resp)).expect("valid");
-                    }
+                    history.on_return(CharmResp::Put(resp));
                 }
 
                 2 => {
-                    {
-                        history.lock().unwrap().on_invoke(client_num, CharmReq::Delete(key.clone())).expect("valid");
-                    }
+                    history.on_invoke(CharmReq::Delete(key.clone()));
                     info!("delete {key}");
                     let resp = client.delete(key.clone()).await?;
                     info!("delete {key} -> {resp:?}");
-                    {
-                        history.lock().unwrap().on_return(client_num, CharmResp::Delete(resp)).expect("valid");
-                    }
+                    history.on_return(CharmResp::Delete(resp));
                 }
 
                 _ => panic!("unexpected value"),
@@ -235,130 +223,4 @@ pub mod tests {
             .expect("Configure tracing");
     }
 
-    #[derive(Debug, Clone, PartialEq)]
-    enum CharmReq {
-        Get(String),
-        Put(String, String),
-        Delete(String),
-    }
-
-    #[derive(Debug, Clone, PartialEq)]
-    enum CharmResp {
-        Get(GetResponse),
-        Put(PutResponse),
-        Delete(DeleteResponse),
-    }
-
-    #[derive(Debug, Clone)]
-    struct CharmSpec {
-        data: HashMap<String, String>,
-        leader_addr: String,
-        term: u64,
-        index: u64,
-    }
-
-    impl CharmSpec {
-        fn new() -> Self {
-            Self {
-                data: HashMap::new(),
-                leader_addr: "".to_string(),
-                term: 0,
-                index: 0,
-            }
-        }
-
-        fn update_term_and_index(&mut self, response_header: &Option<ResponseHeader>) -> bool {
-            if let Some(response_header) = response_header {
-                if self.term > response_header.raft_term {
-                    return false;
-                }
-                if self.term == response_header.raft_term && self.leader_addr != response_header.leader_addr {
-                    return false;
-                }
-                self.term = response_header.raft_term;
-                self.leader_addr = response_header.leader_addr.clone();
-
-                if self.index >= response_header.raft_index {
-                    return false;
-                }
-                self.index = response_header.raft_index;
-
-                true
-            } else {
-                false
-            }
-        }
-    }
-
-    impl SequentialSpec for CharmSpec {
-        type Op = CharmReq;
-        type Ret = CharmResp;
-
-        fn invoke(&mut self, op: &Self::Op) -> Self::Ret {
-            match op {
-                CharmReq::Get(key) => {
-                    let value = self.data.get(key).cloned();
-                    let response_header = Some(ResponseHeader {
-                        leader_addr: "".to_string(),
-                        raft_term: self.term,
-                        raft_index: self.index,
-                    });
-                    let response = GetResponse { value, response_header };
-                    CharmResp::Get(response)
-                }
-                CharmReq::Put(key, value) => {
-                    self.index += 1;
-                    self.data.insert(key.clone(), value.clone());
-                    let response_header = Some(ResponseHeader {
-                        leader_addr: "".to_string(),
-                        raft_term: self.term,
-                        raft_index: self.index,
-                    });
-                    let response = PutResponse { response_header };
-                    CharmResp::Put(response)
-                }
-                CharmReq::Delete(key) => {
-                    self.index += 1;
-                    self.data.remove(key);
-                    let response_header = Some(ResponseHeader {
-                        leader_addr: "".to_string(),
-                        raft_term: self.term,
-                        raft_index: self.index,
-                    });
-                    let response = DeleteResponse { response_header };
-                    CharmResp::Delete(response)
-                }
-            }
-        }
-
-        fn is_valid_step(&mut self, op: &Self::Op, ret: &Self::Ret) -> bool {
-            match (op, ret) {
-                (CharmReq::Get(key), CharmResp::Get(resp)) => {
-                    if !self.update_term_and_index(&resp.response_header) {
-                        return false;
-                    }
-
-                    let value = self.data.get(key).cloned();
-                    value == resp.value
-                }
-                (CharmReq::Put(key, value), CharmResp::Put(resp)) => {
-                    if !self.update_term_and_index(&resp.response_header) {
-                        return false;
-                    }
-
-                    self.data.insert(key.clone(), value.clone());
-                    true
-                }
-                (CharmReq::Delete(key), CharmResp::Delete(resp)) => {
-                    if !self.update_term_and_index(&resp.response_header) {
-                        return false;
-                    }
-
-                    self.data.remove(key);
-                    true
-                }
-                _ => false,
-            }
-        }
-    }
 }
