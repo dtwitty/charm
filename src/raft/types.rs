@@ -1,3 +1,4 @@
+use std::fmt::{Debug, Display, Formatter};
 use serde::{Deserialize, Serialize};
 
 /// A term is a monotonically increasing number representing the number of elections that have
@@ -30,10 +31,22 @@ impl Index {
 }
 
 /// A unique identifier for a node in the cluster, typically an address like "host:port".
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, Ord, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Ord, Serialize, Deserialize)]
 pub struct NodeId {
     pub host: String,
     pub port: u16,
+}
+
+impl Debug for NodeId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.host, self.port)
+    }
+}
+
+impl Display for NodeId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.host, self.port)
+    }
 }
 
 /// A command to be executed by the state machine.

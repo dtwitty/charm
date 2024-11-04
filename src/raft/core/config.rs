@@ -12,13 +12,13 @@ pub struct RaftConfig<I> {
     pub raft_storage_filename: String,
     pub raft_log_storage_filename: String,
 
-    #[builder(default = "Duration::from_millis(150)")]
+    #[builder(default = "Duration::from_millis(500)")]
     pub election_timeout_min: Duration,
 
-    #[builder(default = "Duration::from_millis(300)")]
+    #[builder(default = "Duration::from_millis(1000)")]
     pub election_timeout_max: Duration,
 
-    #[builder(default = "Duration::from_millis(25)")]
+    #[builder(default = "Duration::from_millis(100)")]
     pub heartbeat_interval: Duration,
 
     pub node_info: I

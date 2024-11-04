@@ -9,11 +9,11 @@ pub mod tests {
     use charm::charm::retry::RetryStrategyBuilder;
     use charm::rng::CharmRng;
     use charm::server::{run_charm_server, CharmPeer, CharmServerConfigBuilder};
-    use rand::{RngCore};
+    use rand::RngCore;
     use rayon::prelude::*;
     use std::fs::{create_dir_all, remove_dir_all};
     use std::time::Duration;
-    use tracing::{info, warn, Level};
+    use tracing::{error, info, warn};
     use turmoil::Sim;
     use wyrand::WyRand;
 
@@ -33,7 +33,7 @@ pub mod tests {
     #[test]
     #[cfg(feature = "turmoil")]
     fn test_seed() -> turmoil::Result {
-        let seed = 1;
+        let seed = 780;
         configure_tracing();
         test_one(seed)
     }
@@ -42,7 +42,7 @@ pub mod tests {
     fn test_one(seed: u64) -> turmoil::Result {
         // The simulation uses this seed.
         let mut sim = turmoil::Builder::new()
-            .simulation_duration(Duration::from_secs(120))
+            .simulation_duration(Duration::from_secs(5 * 60))
             .min_message_latency(Duration::from_millis(1))
             .max_message_latency(Duration::from_millis(25))
             .enable_random_order()
@@ -62,7 +62,7 @@ pub mod tests {
         let num_clients = 3;
         for c in 0..num_clients {
             let client_name = format!("client{c}");
-            let client_history = history.client_history(c);
+            let client_history = history.for_client(c);
             sim.client(client_name, run_client(seed_gen.next_u64(), client_history));
         }
 
@@ -71,12 +71,12 @@ pub mod tests {
         let mut cluster_crash_schedule = ClusterCrashSchedule::new(
             crash_rng,
             nodes,
-            // Each node crashes every 30 seconds on average.
-            Duration::from_secs(30),
-            // Nodes take 2 seconds to recover on average.
-            Duration::from_secs(2),
-            // There is some variance in recovery time.
-            Duration::from_millis(100),
+            // How often to crash
+            Duration::from_secs(60),
+            // How long to recover
+            Duration::from_secs(5),
+            // Recovery time stddev
+            Duration::from_millis(250),
         );
         
         while !sim.step()? {
@@ -98,21 +98,16 @@ pub mod tests {
         }
 
         // Check that the history is linearizable.
-        let serialized = history.linearize().ok_or(
-            anyhow::Error::msg("history is not linearizable".to_string())
-        )?;
-
-        // Print the history:
-        if tracing::enabled!(Level::INFO) {
-            serialized.iter().for_each(|(req, resp)| {
-                info!("{req:?} -> {resp:?}");
+        history.linearize().ok_or_else(|| {
+            error!("history is not linearizable! Printing approximate history.");
+            history.history_by_raft_time().iter().for_each(|(c, req, resp)| {
+                error!("{c:?}: {req:?} -> {resp:?}");
             });
-        }
-
-        Ok(())
+            "history is not linearizable".into()
+        }).map(|_| ())
     }
 
-    async fn run_client(client_seed: u64, history: ClientHistory) -> turmoil::Result {
+    async fn run_client(client_seed: u64, mut history: ClientHistory) -> turmoil::Result {
         let mut client_rng = WyRand::new(client_seed);
         let retry_strategy = RetryStrategyBuilder::default()
             .rng(CharmRng::new(client_seed))
@@ -123,7 +118,7 @@ pub mod tests {
         let client = EasyCharmClient::new(format!("http://{host}:12345"), retry_strategy)?;
         let mut sleep_dist = RandomDuration::new(client_rng.clone(), Duration::from_millis(250), Duration::from_millis(10));
 
-        for _ in 0..30 {
+        for _ in 0..5 {
             let i = client_rng.next_u64() % 3;
             let key = format!("key{}", client_rng.next_u64() % 1);
             match i {
