@@ -100,8 +100,8 @@ pub mod tests {
         // Check that the history is linearizable.
         history.linearize().ok_or_else(|| {
             error!("history is not linearizable! Printing approximate history.");
-            history.history_by_raft_time().iter().for_each(|(c, req, resp)| {
-                error!("{c:?}: {req:?} -> {resp:?}");
+            history.history_by_raft_time().iter().for_each(|(c, s, req, resp)| {
+                error!("{c:?}({s:?}): {req:?} -> {resp:?}");
             });
             "history is not linearizable".into()
         }).map(|_| ())

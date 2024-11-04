@@ -161,6 +161,9 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
 
     async fn tick(&mut self) {
         trace!("Entering tick.");
+
+        self.apply_committed().await;
+        
         match self.role {
             Follower(ref follower_state) => {
                 trace!("Running follower tick.");
@@ -320,7 +323,6 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             
             self.commit_index = req.leader_commit.min(last_index);
             self.update_leader(req.leader_id.clone());
-            self.apply_committed().await;
 
             self.reset_election_timer();
             return self.append_entries_response(true).await;
@@ -353,7 +355,6 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
 
         debug!("Sending successful response.");
         self.update_leader(req.leader_id.clone());
-        self.apply_committed().await;
         self.append_entries_response(true).await
     }
 
