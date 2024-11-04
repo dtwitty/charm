@@ -1,14 +1,16 @@
 mod linearizability;
+mod timing;
+
 #[cfg(feature = "turmoil")]
 pub mod tests {
     use crate::linearizability::{CharmHistory, CharmReq, CharmResp, ClientHistory};
+    use crate::timing::{ClusterCrashSchedule, CrashEvent, RandomDuration};
     use charm::charm::client::EasyCharmClient;
     use charm::charm::retry::RetryStrategyBuilder;
     use charm::rng::CharmRng;
     use charm::server::{run_charm_server, CharmPeer, CharmServerConfigBuilder};
-    use rand::{Rng, RngCore};
+    use rand::{RngCore};
     use rayon::prelude::*;
-    use std::collections::HashMap;
     use std::fs::{create_dir_all, remove_dir_all};
     use std::time::Duration;
     use tracing::{info, warn, Level};
@@ -31,7 +33,7 @@ pub mod tests {
     #[test]
     #[cfg(feature = "turmoil")]
     fn test_seed() -> turmoil::Result {
-        let seed = 0;
+        let seed = 1;
         configure_tracing();
         test_one(seed)
     }
@@ -42,7 +44,7 @@ pub mod tests {
         let mut sim = turmoil::Builder::new()
             .simulation_duration(Duration::from_secs(120))
             .min_message_latency(Duration::from_millis(1))
-            .max_message_latency(Duration::from_millis(50))
+            .max_message_latency(Duration::from_millis(25))
             .enable_random_order()
             .tcp_capacity(1024)
             .build_with_rng(Box::new(WyRand::new(seed)));
@@ -51,36 +53,46 @@ pub mod tests {
         let mut seed_gen = WyRand::new(seed);
 
         // Run a cluster of 3 nodes.
-        run_cluster(seed, &mut sim, &mut seed_gen, 3);
+        let num_nodes = 3;
+        run_cluster(seed, &mut sim, &mut seed_gen, num_nodes);
 
         let history = CharmHistory::new();
 
         // Run 3 clients...
-        for c in 0..3 {
+        let num_clients = 3;
+        for c in 0..num_clients {
             let client_name = format!("client{c}");
             let client_history = history.client_history(c);
             sim.client(client_name, run_client(seed_gen.next_u64(), client_history));
         }
 
-        let mut crash_rng = WyRand::new(seed_gen.next_u64());
-        let mut next_crash = random_duration(&mut crash_rng, Duration::from_secs(10), Duration::from_secs(1));
-        let mut restarts = HashMap::new();
+        let nodes = (0..num_nodes).map(|i| format!("host{i}")).collect::<Vec<_>>();
+        let crash_rng = WyRand::new(seed_gen.next_u64());
+        let mut cluster_crash_schedule = ClusterCrashSchedule::new(
+            crash_rng,
+            nodes,
+            // Each node crashes every 30 seconds on average.
+            Duration::from_secs(30),
+            // Nodes take 2 seconds to recover on average.
+            Duration::from_secs(2),
+            // There is some variance in recovery time.
+            Duration::from_millis(100),
+        );
+        
         while !sim.step()? {
             let elapsed = sim.elapsed();
-            if elapsed >= next_crash {
-                next_crash += random_duration(&mut crash_rng, Duration::from_secs(10), Duration::from_secs(5));
-                let host = format!("host{}", crash_rng.next_u64() % 3);
-                warn!("crashing {host}");
-                sim.crash(host.clone());
-                let restart_in = random_duration(&mut crash_rng, Duration::from_secs(5), Duration::from_secs(1));
-                let restart_time = elapsed + restart_in;
-                restarts.insert(host, restart_time);
-            }
-            for (host, restart_time) in restarts.clone() {
-                if elapsed >= restart_time {
-                    warn!("restarting {host}");
-                    sim.bounce(host.clone());
-                    restarts.remove(&host);
+            let events = cluster_crash_schedule.advance(elapsed);
+            for (host, event) in events {
+                match event {
+                    CrashEvent::Crash => {
+                        warn!("crash {host}");
+                        sim.crash(host);
+                    }
+
+                    CrashEvent::Recover => {
+                        warn!("recover {host}");
+                        sim.bounce(host);
+                    }
                 }
             }
         }
@@ -100,15 +112,6 @@ pub mod tests {
         Ok(())
     }
 
-    // Returns a normally-distributed random duration.
-    fn random_duration<R: RngCore>(rng: &mut R, mean: Duration, std_dev: Duration) -> Duration {
-        let mean_millis = mean.as_millis() as f64;
-        let std_dev_millis = std_dev.as_millis() as f64;
-        let normal = rand_distr::Normal::new(mean_millis, std_dev_millis).unwrap();
-        let millis = rng.sample(normal);
-        Duration::from_millis(millis as u64).max(Duration::ZERO)
-    }
-
     async fn run_client(client_seed: u64, history: ClientHistory) -> turmoil::Result {
         let mut client_rng = WyRand::new(client_seed);
         let retry_strategy = RetryStrategyBuilder::default()
@@ -118,6 +121,7 @@ pub mod tests {
         // Client connects to a random host.
         let host = format!("host{}", client_rng.next_u64() % 3);
         let client = EasyCharmClient::new(format!("http://{host}:12345"), retry_strategy)?;
+        let mut sleep_dist = RandomDuration::new(client_rng.clone(), Duration::from_millis(250), Duration::from_millis(10));
 
         for _ in 0..30 {
             let i = client_rng.next_u64() % 3;
@@ -151,7 +155,7 @@ pub mod tests {
                 _ => panic!("unexpected value"),
             };
 
-            let wait = random_duration(&mut client_rng, Duration::from_secs(1), Duration::from_millis(100));
+            let wait = sleep_dist.sample();
             tokio::time::sleep(wait).await;
         }
 
