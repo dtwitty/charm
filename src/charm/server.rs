@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use crate::charm::client::make_charm_client;
 use crate::charm::config::CharmConfig;
 use crate::charm::pb::charm_client::CharmClient;
@@ -63,6 +64,7 @@ impl CharmServerImpl {
         forward: Forward) -> Result<Response<ResponsePb>, Status>
     where
         RequestPb: Clone,
+        ResponsePb: Debug,
         ToStateMachineRequest: FnOnce(RequestPb, oneshot::Sender<ResponsePb>, Span) -> CharmStateMachineRequest,
         Forward: FnOnce(CharmClient<Channel>, RequestPb) -> F,
         F: Future<Output=Result<Response<ResponsePb>, Status>>,
@@ -73,8 +75,10 @@ impl CharmServerImpl {
         match commit {
             Ok(()) => {
                 // We got the commit! Now we wait for the state machine to respond.
+                debug!("Proposal accepted! Waiting for state machine response");
                 match rx.await {
                     Ok(response_pb) => {
+                        debug!("State machine response: {:?}", response_pb);
                         Ok(Response::new(response_pb))
                     }
                     Err(_) => {

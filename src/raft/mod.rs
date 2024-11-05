@@ -43,10 +43,10 @@ impl<R: Send + 'static> RaftHandle<R> {
     /// to the state machine. It is up to the caller to pass their own method of handle
     /// the result of the proposal being applied to the state machine.
     pub async fn propose(&self, proposal: R) -> Result<(), RaftCoreError> {
-        match self.core_handle.propose(proposal).await {
-            Ok(_) => Ok(()),
-            Err(_) => Err(NotReady),
-        }
+        // Propose returns a nested result. If the outer result is an error, it means the
+        // core was not ready. If the inner result is an error, it means the proposal was
+        // not committed.
+        self.core_handle.propose(proposal).await.unwrap_or_else(|_| Err(NotReady))
     }
 }
 

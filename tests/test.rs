@@ -33,7 +33,7 @@ pub mod tests {
     #[test]
     #[cfg(feature = "turmoil")]
     fn test_seed() -> turmoil::Result {
-        let seed = 780;
+        let seed = 3;
         configure_tracing();
         test_one(seed)
     }
@@ -215,7 +215,7 @@ pub mod tests {
     fn configure_tracing() {
         tracing::subscriber::set_global_default(
             tracing_subscriber::fmt()
-                .with_env_filter("info")
+                .with_env_filter("info,charm::charm=debug")
                 .with_timer(SimElapsedTime)
                 .finish(),
         )
