@@ -33,7 +33,7 @@ pub mod tests {
     #[test]
     #[cfg(feature = "turmoil")]
     fn test_seed() -> turmoil::Result {
-        let seed = 3;
+        let seed = 781;
         configure_tracing();
         test_one(seed)
     }
@@ -72,7 +72,7 @@ pub mod tests {
             crash_rng,
             nodes,
             // How often to crash
-            Duration::from_secs(60),
+            Duration::from_secs(30),
             // How long to recover
             Duration::from_secs(5),
             // Recovery time stddev
@@ -118,9 +118,9 @@ pub mod tests {
         let client = EasyCharmClient::new(format!("http://{host}:12345"), retry_strategy)?;
         let mut sleep_dist = RandomDuration::new(client_rng.clone(), Duration::from_millis(250), Duration::from_millis(10));
 
-        for _ in 0..5 {
+        for _ in 0..10 {
             let i = client_rng.next_u64() % 3;
-            let key = format!("key{}", client_rng.next_u64() % 1);
+            let key = format!("key{}", client_rng.next_u64() % 3);
             match i {
                 0 => {
                     history.on_invoke(CharmReq::Get(key.clone()));

@@ -24,7 +24,6 @@ impl<R, I> StateMachineHandle<R, I> {
     }
 }
 
-#[tracing::instrument(skip_all)]
 async fn run<S, I>(mut state_machine: S, mut rx: UnboundedReceiver<(S::Request, RaftInfo<I>)>)
 where
     S: StateMachine<I>,
