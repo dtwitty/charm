@@ -12,6 +12,7 @@ pub mod tests {
     use rand::RngCore;
     use rayon::prelude::*;
     use std::fs::{create_dir_all, remove_dir_all};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tracing::{error, info, warn};
     use turmoil::Sim;
@@ -78,7 +79,7 @@ pub mod tests {
             // Recovery time stddev
             Duration::from_millis(250),
         );
-        
+
         while !sim.step()? {
             let elapsed = sim.elapsed();
             let events = cluster_crash_schedule.advance(elapsed);
@@ -107,7 +108,8 @@ pub mod tests {
         }).map(|_| ())
     }
 
-    async fn run_client(client_seed: u64, mut history: ClientHistory) -> turmoil::Result {
+    async fn run_client(client_seed: u64, history: Arc<Mutex<ClientHistory>>) -> turmoil::Result {
+        let mut history = history.lock().unwrap();
         let mut client_rng = WyRand::new(client_seed);
         let retry_strategy = RetryStrategyBuilder::default()
             .rng(CharmRng::new(client_seed))

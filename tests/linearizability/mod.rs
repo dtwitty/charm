@@ -158,7 +158,7 @@ impl SequentialSpec for CharmSpec {
 /// A convenient thread-safe, cloneable wrapper around a linearizability tester.
 #[derive(Clone)]
 pub struct CharmHistory {
-    client_histories: Arc<DashMap<u64, ClientHistory>>,
+    client_histories: Arc<DashMap<u64, Arc<Mutex<ClientHistory>>>>,
     tester: Arc<Mutex<LinearizabilityTester<u64, CharmSpec>>>,
 }
 
@@ -170,8 +170,8 @@ impl CharmHistory {
         }
     }
 
-    pub fn for_client(&self, client_num: u64) -> ClientHistory {
-        self.client_histories.entry(client_num).or_insert(ClientHistory::new(client_num, self.clone())).clone()
+    pub fn for_client(&self, client_num: u64) -> Arc<Mutex<ClientHistory>> {
+        self.client_histories.entry(client_num).or_insert(Arc::new(Mutex::new(ClientHistory::new(client_num, self.clone())))).clone()
     }
 
     pub fn linearize(&self) -> Option<Vec<(CharmReq, CharmResp)>> {
@@ -182,7 +182,7 @@ impl CharmHistory {
         let mut v = Vec::new();
         self.client_histories.iter().for_each(|r| {
             let client_num = r.key().clone();
-            let client_history = r.value();
+            let client_history = r.value().lock().unwrap();
             client_history.history().chunks(2).enumerate().for_each(|(i, chunk)| {
                 if chunk.len() != 2 {
                     panic!("Got a malformed request-response: {:?}", chunk);
