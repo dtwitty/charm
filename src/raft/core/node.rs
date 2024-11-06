@@ -163,7 +163,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         trace!("Entering tick.");
 
         self.apply_committed().await;
-        
+
         match self.role {
             Follower(ref follower_state) => {
                 trace!("Running follower tick.");
@@ -408,7 +408,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
 
         let last_index = self.get_log_storage().last_index().await.unwrap();
         let current_term = self.get_current_term().await;
-        
+
         // If we are not the leader, we don't care about these responses.
         if let Leader(ref mut leader_state) = self.role {
             if res.success {
@@ -433,13 +433,16 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
                         if r.is_err() {
                             warn!("Failed to send commit notification. Client request may already be gone.");
                             return;
-                        } 
-                            let raft_info = RaftInfo {
-                                leader_info: self.config.node_info.clone(),
-                                term: current_term,
-                                index: idx,
-                            };
-                            self.state_machine.apply(proposal.req, raft_info);
+                        }
+
+                        let raft_info = RaftInfo {
+                            leader_info: self.config.node_info.clone(),
+                            term: current_term,
+                            index: idx,
+                        };
+
+                        self.last_applied = idx;
+                        self.state_machine.apply(proposal.req, raft_info);
                     }
                 }
             } else {

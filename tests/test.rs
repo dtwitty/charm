@@ -120,32 +120,32 @@ pub mod tests {
         let client = EasyCharmClient::new(format!("http://{host}:12345"), retry_strategy)?;
         let mut sleep_dist = RandomDuration::new(client_rng.clone(), Duration::from_millis(250), Duration::from_millis(10));
 
-        for _ in 0..10 {
+        for k in 0..10 {
             let i = client_rng.next_u64() % 3;
             let key = format!("key{}", client_rng.next_u64() % 3);
             match i {
                 0 => {
                     history.on_invoke(CharmReq::Get(key.clone()));
-                    info!("get {key}");
+                    info!("Starting request {k}: get {key}");
                     let resp = client.get(key.clone()).await?;
-                    info!("get {key} -> {resp:?}");
+                    info!("Finished request {k}: get {key} -> {resp:?}");
                     history.on_return(CharmResp::Get(resp));
                 }
 
                 1 => {
                     let value = format!("value{}", client_rng.next_u64() % 3);
                     history.on_invoke(CharmReq::Put(key.clone(), value.clone()));
-                    info!("put {key} -> {value}");
+                    info!("Starting request {k}: put {key} -> {value}");
                     let resp = client.put(key.clone(), value.clone()).await?;
-                    info!("put {key} -> {value} -> {resp:?}");
+                    info!("Finished request {k}: put {key} -> {value} -> {resp:?}");
                     history.on_return(CharmResp::Put(resp));
                 }
 
                 2 => {
                     history.on_invoke(CharmReq::Delete(key.clone()));
-                    info!("delete {key}");
+                    info!("Starting request {k}: delete {key}");
                     let resp = client.delete(key.clone()).await?;
-                    info!("delete {key} -> {resp:?}");
+                    info!("Finished request {k}: delete {key} -> {resp:?}");
                     history.on_return(CharmResp::Delete(resp));
                 }
 
