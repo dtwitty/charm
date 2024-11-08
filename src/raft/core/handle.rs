@@ -72,7 +72,7 @@ impl<R: Send + 'static> RaftCoreHandle<R> {
     pub fn propose(&self, proposal: R) -> Receiver<Result<(), RaftCoreError>> {
         let (commit_tx, rx) = oneshot::channel();
         let entry = CoreQueueEntry::Propose {
-            proposal,
+            request: proposal,
             commit_tx,
             span: Span::current(),
         };

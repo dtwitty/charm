@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use tokio::sync::oneshot;
 use tonic::async_trait;
-use tracing::Span;
+use tracing::{debug, Span};
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -152,6 +152,7 @@ impl raft::state_machine::StateMachine<CharmNodeInfo> for CharmStateMachine {
                         // Check for a cached response.
                         if let Some(cache) = self.maybe_get_response_cache(request_header.client_id.unwrap()) {
                             if let Some(resp) = cache.get_put(request_header.request_number) {
+                                debug!("Responding with cached response");
                                 maybe_respond(response_tx, resp.clone());
                                 return;
                             }
@@ -175,7 +176,7 @@ impl raft::state_machine::StateMachine<CharmNodeInfo> for CharmStateMachine {
             CharmStateMachineRequest::Delete { req, response_tx, span } => {
                 let key = req.key;
                 span.in_scope(|| {
-                    tracing::debug!("Delete `{:?}`", key);
+                    debug!("Delete `{:?}`", key);
 
                     if let Some(request_header) = req.request_header {
                         // Clean up old requests.
@@ -184,6 +185,7 @@ impl raft::state_machine::StateMachine<CharmNodeInfo> for CharmStateMachine {
                         // Check for a cached response.
                         if let Some(cache) = self.maybe_get_response_cache(request_header.client_id.unwrap()) {
                             if let Some(resp) = cache.get_delete(request_header.request_number) {
+                                debug!("Responding with cached response");
                                 maybe_respond(response_tx, resp.clone());
                                 return;
                             }

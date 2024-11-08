@@ -16,10 +16,11 @@ pub enum CoreQueueEntry<R> {
     },
 
     AppendEntriesResponse(AppendEntriesResponse),
+    
     RequestVoteResponse(RequestVoteResponse),
 
     Propose {
-        proposal: R,
+        request: R,
         commit_tx: oneshot::Sender<Result<(), RaftCoreError>>,
         span: Span,
     },

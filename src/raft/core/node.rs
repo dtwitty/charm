@@ -13,6 +13,7 @@ use futures::FutureExt;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
+use std::mem::swap;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot;
@@ -47,12 +48,38 @@ struct PeerState {
     match_index: Index,
 }
 
-struct LeaderState {
-    peer_states: HashMap<NodeId, PeerState>,
-    heartbeat_timer: Shared<Sleep>,
+
+struct Proposal<R> {
+    request: R,
+    commit_tx: oneshot::Sender<Result<(), RaftCoreError>>,
 }
 
-impl LeaderState {
+impl<R> Proposal<R> {
+    // The proper way to access the request is to get a commit success.
+    // We also return the request here because `send` consumes `commit_tx`.
+    pub fn commit_success(self) -> R {
+        let r = self.commit_tx.send(Ok(()));
+        if r.is_err() {
+            warn!("Failed to send commit notification. Client request may already be gone.");
+        }
+        self.request
+    }
+
+    pub fn commit_failure(self, err: RaftCoreError) {
+        let r = self.commit_tx.send(Err(err));
+        if r.is_err() {
+            warn!("Failed to send commit failure notification. Client request may already be gone.");
+        }
+    }
+}
+
+struct LeaderState<R> {
+    peer_states: HashMap<NodeId, PeerState>,
+    heartbeat_timer: Shared<Sleep>,
+    proposals: BTreeMap<Index, Proposal<R>>,
+}
+
+impl<R> LeaderState<R> {
     fn get_mut_peer_state(&mut self, node_id: &NodeId) -> &mut PeerState {
         self.peer_states.get_mut(node_id).expect("peer state not found")
     }
@@ -76,14 +103,14 @@ impl LeaderState {
     }
 }
 
-enum Role {
+enum Role<R> {
     Follower(FollowerState),
     Candidate(CandidateState),
-    Leader(LeaderState),
+    Leader(LeaderState<R>),
 }
 
 #[allow(dead_code)]
-impl Role {
+impl<R> Role<R> {
     pub fn is_leader(&self) -> bool {
         matches!(self, Leader(_))
     }
@@ -95,11 +122,6 @@ impl Role {
     pub fn is_candidate(&self) -> bool {
         matches!(self, Candidate(_))
     }
-}
-
-struct Proposal<R> {
-    req: R,
-    commit_tx: oneshot::Sender<Result<(), RaftCoreError>>,
 }
 
 pub struct RaftNode<R, S, I> {
@@ -118,12 +140,17 @@ pub struct RaftNode<R, S, I> {
 
     /// State that only exists if this node is a leader.
     /// If this node is not a leader, this field is `None`.
-    role: Role,
+    role: Role<R>,
 
+    /// For receiving events from the core queue, which is pretty much everything but timeouts.
     core_rx: UnboundedReceiver<CoreQueueEntry<R>>,
+
+    /// For sending messages to other nodes.
     outbound_network: OutboundNetworkHandle,
+
+    /// For applying commands to the state machine.
     state_machine: StateMachineHandle<R, I>,
-    proposals: BTreeMap<Index, Proposal<R>>,
+
     rng: CharmRng,
 }
 
@@ -139,7 +166,6 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             election_timer: sleep(config.get_election_timeout(&mut rng)).shared(),
             leader_id: None,
         };
-        let proposals = BTreeMap::new();
 
         let mut node = RaftNode {
             config,
@@ -150,7 +176,6 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             core_rx,
             outbound_network,
             state_machine,
-            proposals,
             rng,
         };
 
@@ -237,9 +262,9 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
                 self.handle_request_vote_response(response).await;
             }
 
-            CoreQueueEntry::Propose { proposal, commit_tx, span } => {
+            CoreQueueEntry::Propose { request, commit_tx, span } => {
                 span.in_scope(|| {
-                    self.handle_propose(proposal, commit_tx)
+                    self.handle_propose(Proposal { request, commit_tx })
                 }).await;
             }
         }
@@ -312,7 +337,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             // The log is empty. We can accept any entries.
             debug!("Append entries from start of the log. Accepting request.");
 
-            // Truncate the log.
+            // Truncate the log in case there are any entries.
             self.get_log_storage().truncate(Index(0)).await.unwrap();
 
             let mut last_index = Index(0);
@@ -347,7 +372,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         // The previous log term matches. Append the new entries.
         debug!("Accepting request.");
         self.reset_election_timer();
-        self.check_and_append(&req.leader_id, req.entries, req.prev_log_index.next()).await;
+        self.check_and_append(req.entries, req.prev_log_index.next()).await;
 
         if req.leader_commit > self.commit_index {
             let last_index = self.get_log_storage().last_index().await.unwrap();
@@ -360,26 +385,19 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         self.append_entries_response(true).await
     }
 
-    async fn check_and_append(&mut self, leader_id: &NodeId, entries: Vec<LogEntry>, mut prev_log_index: Index) {
+    async fn check_and_append(&mut self, entries: Vec<LogEntry>, mut prev_log_index: Index) {
         for entry in entries {
             if let Some(prev_entry) = self.get_log_storage().get(prev_log_index).await.unwrap() {
                 if prev_entry.term != entry.term {
                     // There is a conflict. Truncate the log and append the new entry.
                     warn!("Log conflict detected at index {:?}. Request has term {:?} but we have term {:?}. Truncating log.", prev_log_index, entry.term, prev_entry.term);
                     self.get_log_storage().truncate(prev_log_index).await.unwrap();
-                    // Fail the futures that got truncated.
-                    let to_fail = self.proposals.split_off(&prev_log_index);
-                    for (_, proposal) in to_fail {
-                        let r = proposal.commit_tx.send(Err(RaftCoreError::NotLeader {
-                            leader_id: Some(leader_id.clone()),
-                        }));
-                        if r.is_err() {
-                            warn!("Failed to send commit notification. Client request may already be gone.");
-                        }
-                    }
 
+                    // The log has cleared the bad entry and everything after it.
+                    // Now we can append the new entry.
                     self.get_log_storage().append(entry).await.unwrap();
                 }
+            // Nothing to do - the entry already matches!
             } else {
                 // No conflict, append the entry.
                 self.get_log_storage().append(entry).await.unwrap();
@@ -532,39 +550,32 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         }
     }
 
-    async fn handle_propose(&mut self, request: R, commit_tx: oneshot::Sender<Result<(), RaftCoreError>>) {
-        match self.role {
-            Candidate(_) => {
+    async fn handle_propose(&mut self, proposal: Proposal<R>) {
+        if let Candidate(_) = self.role {
                 debug!("Not the leader, but a candidate. Failing proposal.");
-                let res = Err(RaftCoreError::NotLeader { leader_id: None });
-                let r = commit_tx.send(res);
-                if r.is_err() {
-                    warn!("Failed to send commit notification. Client request may already be gone.");
-                }
+            proposal.commit_failure(RaftCoreError::NotLeader { leader_id: None });
+            return;
             }
 
-            Follower(ref follower_state) => {
+        if let Follower(ref follower_state) = self.role {
                 debug!("Not the leader, but a follower. Failing proposal.");
-                let res = Err(RaftCoreError::NotLeader { leader_id: follower_state.leader_id.clone() });
-                let r = commit_tx.send(res);
-                if r.is_err() {
-                    warn!("Failed to send commit notification. Client request may already be gone.");
-                }
+            proposal.commit_failure(RaftCoreError::NotLeader { leader_id: follower_state.leader_id.clone() });
+            return;
             }
 
-            Leader(_) => {
-                let serialized_data = serde_json::to_vec(&request).unwrap();
-                let serialized_leader_info = serde_json::to_vec(&self.config.node_info).unwrap();
-                let current_term = self.get_current_term().await;
-                let log_entry = LogEntry {
-                    leader_info: serialized_leader_info,
-                    term: current_term,
-                    data: Data(serialized_data),
-                };
-                let index = self.get_log_storage().append(log_entry).await.unwrap();
+        // We do this stuff here instead of a match statement to make the borrow-checker happy.
+        let serialized_data = serde_json::to_vec(&proposal.request).unwrap();
+        let serialized_leader_info = serde_json::to_vec(&self.config.node_info).unwrap();
+        let current_term = self.get_current_term().await;
+        let log_entry = LogEntry {
+            leader_info: serialized_leader_info,
+            term: current_term,
+            data: Data(serialized_data),
+        };
+        let index = self.get_log_storage().append(log_entry).await.unwrap();
+        if let Leader(ref mut leader_state) = self.role {
                 debug!("Proposal appended to log at index {:?}.", index);
-                self.proposals.insert(index, Proposal { req: request, commit_tx });
-            }
+            leader_state.proposals.insert(index, proposal);
         }
     }
 
@@ -582,6 +593,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         let leader_state = LeaderState {
             peer_states,
             heartbeat_timer: sleep(self.config.heartbeat_interval).shared(),
+            proposals: BTreeMap::new(),
         };
         let role = Leader(leader_state);
         self.role = role;
@@ -636,8 +648,16 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
     async fn convert_to_follower(&mut self) {
         self.set_voted_for(None).await;
         let follower_state = FollowerState { election_timer: sleep(self.get_election_timeout()).shared(), leader_id: None };
-        let role = Follower(follower_state);
-        self.role = role;
+        let mut role = Follower(follower_state);
+        swap(&mut self.role, &mut role);
+        let prev_role = role;
+
+        if let Leader(leader_state) = prev_role {
+            // Drop all proposals.
+            for (_, proposal) in leader_state.proposals {
+                proposal.commit_failure(RaftCoreError::NotLeader { leader_id: None });
+            }
+        }
     }
 
     fn update_leader(&mut self, leader_id: NodeId) {
@@ -660,32 +680,32 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         while self.last_applied < self.commit_index {
             self.last_applied = self.last_applied.next();
 
-            // See if we have a proposal for this index.
-            // If we do, then we were the leader for this proposal.
-            if let Some(proposal) = self.proposals.remove(&self.last_applied) {
-                // Inform the client that the proposal was committed.
-                let r = proposal.commit_tx.send(Ok(()));
-                if r.is_err() {
-                    warn!("Failed to send commit notification. Client request may already be gone.");
-                }
+            if let Leader(ref mut leader_state) = self.role {
+                if let Some(proposal) = leader_state.proposals.remove(&self.last_applied) {
+                    // Inform the client that the proposal was committed.
+                    let request = proposal.commit_success();
 
-                let raft_info = RaftInfo {
-                    leader_info: self.config.node_info.clone(),
-                    term: current_term,
-                    index: self.last_applied,
-                };
-                self.state_machine.apply(proposal.req, raft_info);
-            } else {
-                let entry = self.get_log_storage().get(self.last_applied).await.unwrap().unwrap();
-                let req: R = serde_json::from_slice(&entry.data.0).unwrap();
-                let leader_info: I = serde_json::from_slice(&entry.leader_info).unwrap();
-                let raft_info = RaftInfo {
-                    leader_info,
-                    term: entry.term,
-                    index: self.last_applied,
-                };
-                self.state_machine.apply(req, raft_info);
+                    let raft_info = RaftInfo {
+                        leader_info: self.config.node_info.clone(),
+                        term: current_term,
+                        index: self.last_applied,
+                    };
+                    debug!("Applying cached proposal");
+                    self.state_machine.apply(request, raft_info);
+                    continue;
+                }
             }
+
+            let entry = self.get_log_storage().get(self.last_applied).await.unwrap().unwrap();
+            let req: R = serde_json::from_slice(&entry.data.0).unwrap();
+            let leader_info: I = serde_json::from_slice(&entry.leader_info).unwrap();
+            let raft_info = RaftInfo {
+                leader_info,
+                term: entry.term,
+                index: self.last_applied,
+            };
+            debug!("Applying proposal from the log");
+                self.state_machine.apply(req, raft_info);
         }
     }
 

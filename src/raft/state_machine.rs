@@ -21,7 +21,7 @@ impl<R, I> StateMachineHandle<R, I> {
     }
 
     pub fn apply(&self, request: R, raft_info: RaftInfo<I>) {
-        debug!("Applying index {} to the state machine", raft_info.index.0);
+        debug!("Applying index {} in term {} to the state machine", raft_info.index.0, raft_info.term.0);
         self.tx.send((request, raft_info)).unwrap();
     }
 }

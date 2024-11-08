@@ -34,7 +34,7 @@ pub mod tests {
     #[test]
     #[cfg(feature = "turmoil")]
     fn test_seed() -> turmoil::Result {
-        let seed = 4186;
+        let seed = 3694;
         configure_tracing();
         test_one(seed)
     }
@@ -60,7 +60,7 @@ pub mod tests {
         let history = CharmHistory::new();
 
         // Run 3 clients...
-        let num_clients = 2;
+        let num_clients = 3;
         for c in 0..num_clients {
             let client_name = format!("client{c}");
             let client_history = history.for_client(c);
@@ -120,7 +120,7 @@ pub mod tests {
         let client = EasyCharmClient::new(format!("http://{host}:12345"), retry_strategy)?;
         let mut sleep_dist = RandomDuration::new(client_rng.clone(), Duration::from_millis(250), Duration::from_millis(10));
 
-        for k in 0..3 {
+        for k in 0..4 {
             let i = client_rng.next_u64() % 3;
             let key = format!("key{}", client_rng.next_u64() % 1);
             match i {
