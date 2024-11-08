@@ -13,7 +13,6 @@ use futures::FutureExt;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
-use std::mem::swap;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot;
@@ -322,6 +321,8 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             }
             
             self.commit_index = req.leader_commit.min(last_index);
+            debug!("Commit index is now {:?}.", self.commit_index);
+            
             self.update_leader(req.leader_id.clone());
 
             self.reset_election_timer();
@@ -352,6 +353,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             let last_index = self.get_log_storage().last_index().await.unwrap();
             self.commit_index = req.leader_commit.min(last_index);
         }
+        debug!("Commit index is now {:?}.", self.commit_index);
 
         debug!("Sending successful response.");
         self.update_leader(req.leader_id.clone());
@@ -406,8 +408,8 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             debug!("Not the leader. Ignoring response.");
         }
 
+        // Run this here to appease the borrow checker.
         let last_index = self.get_log_storage().last_index().await.unwrap();
-        let current_term = self.get_current_term().await;
 
         // If we are not the leader, we don't care about these responses.
         if let Leader(ref mut leader_state) = self.role {
@@ -422,28 +424,6 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
                 if majority_match > self.commit_index {
                     debug!("Cluster majority advanced to index {:?}. Updating commit index.", majority_match);
                     self.commit_index = majority_match;
-
-                    // Split off futures that can be completed.
-                    let mut to_complete = self.proposals.split_off(&(majority_match.next()));
-                    swap(&mut self.proposals, &mut to_complete);
-
-                    // Complete the futures, and send them to the state machine.
-                    for (idx, proposal) in to_complete {
-                        let r = proposal.commit_tx.send(Ok(()));
-                        if r.is_err() {
-                            warn!("Failed to send commit notification. Client request may already be gone.");
-                            return;
-                        }
-
-                        let raft_info = RaftInfo {
-                            leader_info: self.config.node_info.clone(),
-                            term: current_term,
-                            index: idx,
-                        };
-
-                        self.last_applied = idx;
-                        self.state_machine.apply(proposal.req, raft_info);
-                    }
                 }
             } else {
                 // The AppendEntriesRequest failed. Decrement the next_index. We will retry later.
@@ -676,17 +656,36 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
     }
 
     async fn apply_committed(&mut self) {
+        let current_term = self.get_current_term().await;
         while self.last_applied < self.commit_index {
             self.last_applied = self.last_applied.next();
-            let entry = self.get_log_storage().get(self.last_applied).await.unwrap().unwrap();
-            let req: R = serde_json::from_slice(&entry.data.0).unwrap();
-            let leader_info: I = serde_json::from_slice(&entry.leader_info).unwrap();
-            let raft_info = RaftInfo {
-                leader_info,
-                term: entry.term,
-                index: self.last_applied,
-            };
-            self.state_machine.apply(req, raft_info);
+
+            // See if we have a proposal for this index.
+            // If we do, then we were the leader for this proposal.
+            if let Some(proposal) = self.proposals.remove(&self.last_applied) {
+                // Inform the client that the proposal was committed.
+                let r = proposal.commit_tx.send(Ok(()));
+                if r.is_err() {
+                    warn!("Failed to send commit notification. Client request may already be gone.");
+                }
+
+                let raft_info = RaftInfo {
+                    leader_info: self.config.node_info.clone(),
+                    term: current_term,
+                    index: self.last_applied,
+                };
+                self.state_machine.apply(proposal.req, raft_info);
+            } else {
+                let entry = self.get_log_storage().get(self.last_applied).await.unwrap().unwrap();
+                let req: R = serde_json::from_slice(&entry.data.0).unwrap();
+                let leader_info: I = serde_json::from_slice(&entry.leader_info).unwrap();
+                let raft_info = RaftInfo {
+                    leader_info,
+                    term: entry.term,
+                    index: self.last_applied,
+                };
+                self.state_machine.apply(req, raft_info);
+            }
         }
     }
 

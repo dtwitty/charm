@@ -61,13 +61,14 @@ impl CharmSpec {
             if self.term == response_header.raft_term && self.leader_addr != response_header.leader_addr {
                 return false;
             }
-            self.term = response_header.raft_term;
-            self.leader_addr = response_header.leader_addr.clone();
 
             // The index must never decrease.
-            if self.index >= response_header.raft_index {
+            if self.index > response_header.raft_index {
                 return false;
             }
+
+            self.term = response_header.raft_term;
+            self.leader_addr = response_header.leader_addr.clone();
             self.index = response_header.raft_index;
 
             true

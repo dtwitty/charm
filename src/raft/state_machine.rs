@@ -2,6 +2,7 @@ use crate::raft::types::RaftInfo;
 use tokio::spawn;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tonic::async_trait;
+use tracing::debug;
 
 #[async_trait]
 pub trait StateMachine<I>: Send + 'static {
@@ -20,6 +21,7 @@ impl<R, I> StateMachineHandle<R, I> {
     }
 
     pub fn apply(&self, request: R, raft_info: RaftInfo<I>) {
+        debug!("Applying index {} to the state machine", raft_info.index.0);
         self.tx.send((request, raft_info)).unwrap();
     }
 }

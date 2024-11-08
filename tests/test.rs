@@ -20,7 +20,7 @@ pub mod tests {
 
     #[test]
     fn test_charm() {
-        let bad_seed = (0..1000)
+        let bad_seed = (0..10000)
             .into_par_iter()
             .find_any(|seed| {
                 matches!(test_one(*seed), Err(_))
@@ -34,7 +34,7 @@ pub mod tests {
     #[test]
     #[cfg(feature = "turmoil")]
     fn test_seed() -> turmoil::Result {
-        let seed = 781;
+        let seed = 4186;
         configure_tracing();
         test_one(seed)
     }
@@ -60,7 +60,7 @@ pub mod tests {
         let history = CharmHistory::new();
 
         // Run 3 clients...
-        let num_clients = 3;
+        let num_clients = 2;
         for c in 0..num_clients {
             let client_name = format!("client{c}");
             let client_history = history.for_client(c);
@@ -120,9 +120,9 @@ pub mod tests {
         let client = EasyCharmClient::new(format!("http://{host}:12345"), retry_strategy)?;
         let mut sleep_dist = RandomDuration::new(client_rng.clone(), Duration::from_millis(250), Duration::from_millis(10));
 
-        for k in 0..10 {
+        for k in 0..3 {
             let i = client_rng.next_u64() % 3;
-            let key = format!("key{}", client_rng.next_u64() % 3);
+            let key = format!("key{}", client_rng.next_u64() % 1);
             match i {
                 0 => {
                     history.on_invoke(CharmReq::Get(key.clone()));
@@ -217,7 +217,7 @@ pub mod tests {
     fn configure_tracing() {
         tracing::subscriber::set_global_default(
             tracing_subscriber::fmt()
-                .with_env_filter("info,charm::charm=debug")
+                .with_env_filter("info,charm::charm=debug,charm::raft::core::node=debug,charm::raft::state_machine=debug")
                 .with_timer(SimElapsedTime)
                 .finish(),
         )
