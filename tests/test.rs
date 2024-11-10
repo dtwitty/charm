@@ -3,9 +3,10 @@ mod timing;
 
 #[cfg(feature = "turmoil")]
 pub mod tests {
-    const NUM_REQUESTS: usize = 3;
-    const NUM_NODES: usize = 5;
-    const NUM_RUNS: u64 = 10000;
+    const NUM_REQUESTS: usize = 10;
+    const NUM_NODES: usize = 3;
+    const NUM_CLIENTS: usize = 3;
+    const NUM_RUNS: usize = 10000;
 
     use crate::linearizability::{CharmHistory, CharmReq, CharmResp, ClientHistory};
     use crate::timing::{ClusterCrashSchedule, CrashEvent, RandomDuration};
@@ -24,7 +25,7 @@ pub mod tests {
 
     #[test]
     fn test_charm() {
-        let bad_seed = (0..NUM_RUNS)
+        let bad_seed = (0..NUM_RUNS as u64)
             .into_par_iter()
             .find_any(|seed| {
                 matches!(test_one(*seed, false), Err(_))
@@ -38,12 +39,12 @@ pub mod tests {
     #[test]
     #[cfg(feature = "turmoil")]
     fn test_seed() -> turmoil::Result {
-        let seed = 9081;
+        let seed = 8278;
         configure_tracing();
         test_one(seed, true)
     }
 
-    #[tracing::instrument()]
+    #[tracing::instrument(skip_all)]
     fn test_one(seed: u64, print_history_on_error: bool) -> turmoil::Result {
         // The simulation uses this seed.
         let mut sim = turmoil::Builder::new()
@@ -63,10 +64,9 @@ pub mod tests {
         let history = CharmHistory::new();
 
         // Run 3 clients...
-        let num_clients = 2;
-        for c in 0..num_clients {
+        for c in 0..NUM_CLIENTS {
             let client_name = format!("client{c}");
-            let client_history = history.for_client(c);
+            let client_history = history.for_client(c as u64);
             sim.client(client_name, run_client(seed_gen.next_u64(), client_history));
         }
 
