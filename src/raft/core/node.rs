@@ -12,7 +12,7 @@ use futures::future::Shared;
 use futures::FutureExt;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::mem::swap;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -31,8 +31,8 @@ struct FollowerState {
 }
 
 struct CandidateState {
-    /// The number of votes that the candidate has received in the current term.
-    votes_received: u64,
+    /// The nodes (including ourselves) who have voted for us.
+    votes_received: BTreeSet<NodeId>,
 
     /// The timer that will fire when the election timeout is reached.
     /// This is used to start a new election.
@@ -282,7 +282,11 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
 
         // Become a candidate, and reset the election timer.
         let election_timeout = self.get_election_timeout();
-        let candidate_state = CandidateState { votes_received: 1, election_timer: sleep(election_timeout).shared() };
+        let mut candidate_state = CandidateState {
+            votes_received: BTreeSet::new(),
+            election_timer: sleep(election_timeout).shared(),
+        };
+        candidate_state.votes_received.insert(self.node_id().clone());
         self.role = Candidate(candidate_state);
 
         // Send RequestVoteRequests to all nodes.
@@ -528,12 +532,19 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         match self.role {
             Candidate(ref mut state) => {
                 if res.vote_granted {
-                    state.votes_received += 1;
-
+                    if state.votes_received.contains(&res.node_id) {
+                        // We already got a vote from this node. Ignore it.
+                        debug!("Already got a vote from {:?}. Ignoring response.", res.node_id);
+                        return;
+                    }
+                    
+                    state.votes_received.insert(res.node_id.clone());
                     let total_nodes = self.config.other_nodes.len() + 1;
                     let majority = total_nodes / 2 + 1;
-                    info!("Vote granted by {:?}. We now have {:?} out of {:?} needed votes", res.node_id, state.votes_received, majority);
-                    if state.votes_received >= majority as u64 && !self.role.is_leader() {
+                    let num_votes = state.votes_received.len();
+                    info!("Vote granted by {:?}. We now have {:?} out of {:?} needed votes", res.node_id, num_votes, majority);
+                    
+                    if num_votes >= majority && !self.role.is_leader() {
                         // Great success!
                         self.become_leader().await;
                     }

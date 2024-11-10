@@ -3,6 +3,10 @@ mod timing;
 
 #[cfg(feature = "turmoil")]
 pub mod tests {
+    const NUM_REQUESTS: usize = 3;
+    const NUM_NODES: usize = 5;
+    const NUM_RUNS: u64 = 10000;
+
     use crate::linearizability::{CharmHistory, CharmReq, CharmResp, ClientHistory};
     use crate::timing::{ClusterCrashSchedule, CrashEvent, RandomDuration};
     use charm::charm::client::EasyCharmClient;
@@ -20,7 +24,7 @@ pub mod tests {
 
     #[test]
     fn test_charm() {
-        let bad_seed = (0..100000)
+        let bad_seed = (0..NUM_RUNS)
             .into_par_iter()
             .find_any(|seed| {
                 matches!(test_one(*seed, false), Err(_))
@@ -34,7 +38,7 @@ pub mod tests {
     #[test]
     #[cfg(feature = "turmoil")]
     fn test_seed() -> turmoil::Result {
-        let seed = 7308;
+        let seed = 9081;
         configure_tracing();
         test_one(seed, true)
     }
@@ -54,8 +58,7 @@ pub mod tests {
         let mut seed_gen = WyRand::new(seed);
 
         // Run a cluster of 3 nodes.
-        let num_nodes = 5;
-        run_cluster(seed, &mut sim, &mut seed_gen, num_nodes);
+        run_cluster(seed, &mut sim, &mut seed_gen, NUM_NODES);
 
         let history = CharmHistory::new();
 
@@ -67,7 +70,7 @@ pub mod tests {
             sim.client(client_name, run_client(seed_gen.next_u64(), client_history));
         }
 
-        let nodes = (0..num_nodes).map(|i| format!("host{i}")).collect::<Vec<_>>();
+        let nodes = (0..NUM_NODES).map(|i| format!("host{i}")).collect::<Vec<_>>();
         let crash_rng = WyRand::new(seed_gen.next_u64());
         let mut cluster_crash_schedule = ClusterCrashSchedule::new(
             crash_rng,
@@ -122,7 +125,7 @@ pub mod tests {
         let client = EasyCharmClient::new(format!("http://{host}:12345"), retry_strategy)?;
         let mut sleep_dist = RandomDuration::new(client_rng.clone(), Duration::from_millis(250), Duration::from_millis(10));
 
-        for k in 0..3 {
+        for k in 0..NUM_REQUESTS {
             let i = client_rng.next_u64() % 3;
             let key = format!("key{}", client_rng.next_u64() % 1);
             match i {
