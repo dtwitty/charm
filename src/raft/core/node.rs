@@ -240,7 +240,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         match cqe {
             CoreQueueEntry::AppendEntriesRequest { request, response_tx } => {
                 let response = self.handle_append_entries_request(request).await;
-                let r = response_tx.send(response);
+                let r = response_tx.send(Ok(response));
                 if r.is_err() {
                     warn!("Failed to send AppendEntriesResponse. Client request may have timed out.");
                 }
@@ -248,7 +248,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
 
             CoreQueueEntry::RequestVoteRequest { request, response_tx } => {
                 let response = self.handle_request_vote_request(request).await;
-                let r = response_tx.send(response);
+                let r = response_tx.send(Ok(response));
                 if r.is_err() {
                     warn!("Failed to send RequestVoteResponse. Client request may have timed out.");
                 }

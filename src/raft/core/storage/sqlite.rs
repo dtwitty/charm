@@ -39,7 +39,7 @@ impl SqliteLogStorage {
 impl LogStorage for SqliteLogStorage {
     async fn append(&self, entry: LogEntry) -> Index {
         let mut tx = self.pool.begin().await.unwrap();
-        sqlx::query("INSERT INTO log (leader_info, term, data) VALUES (?, ?, ?, ?)")
+        sqlx::query("INSERT INTO log (leader_info, term, data) VALUES (?, ?, ?)")
             .bind(entry.leader_info)
             .bind(entry.term.0 as i64)
             .bind(entry.data.0)

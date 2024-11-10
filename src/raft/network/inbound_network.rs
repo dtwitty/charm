@@ -20,7 +20,7 @@ impl<R: Send + 'static> Raft for InboundNetwork<R> {
         debug!("Received AppendEntriesRequest: {:?}", request_pb);
         let request = AppendEntriesRequest::from_pb(&request_pb);
         let rx = self.handle.append_entries_request(request);
-        let response = rx.await.unwrap();
+        let response = rx.await.map_err(|_| Status::internal("Raft not ready"))?;
         let response_pb = response.to_pb();
         debug!("Sending AppendEntriesResponse: {:?}", response_pb);
         Ok(Response::new(response_pb))
@@ -32,7 +32,7 @@ impl<R: Send + 'static> Raft for InboundNetwork<R> {
         debug!("Received RequestVoteRequest: {:?}", request_pb);
         let request = RequestVoteRequest::from_pb(&request_pb);
         let rx = self.handle.request_vote_request(request);
-        let response = rx.await.unwrap();
+        let response = rx.await.map_err(|_| Status::internal("Raft not ready"))?;
         let response_pb = response.to_pb();
         debug!("Sending RequestVoteResponse: {:?}", response_pb);
         Ok(Response::new(response_pb))

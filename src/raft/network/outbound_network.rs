@@ -65,7 +65,9 @@ async fn run<R: Send + 'static>(handle: RaftCoreHandle<R>, mut rx: UnboundedRece
                             Ok(response) => {
                                 let response_pb = response.into_inner();
                                 let response = AppendEntriesResponse::from_pb(&response_pb);
-                                handle_clone.append_entries_response(response);
+
+                                // It's fine if the core doesn't accept this response because it's in a bad state anyway.
+                                let _ = handle_clone.append_entries_response(response);
                             }
 
                             Err(e) => {
@@ -82,7 +84,8 @@ async fn run<R: Send + 'static>(handle: RaftCoreHandle<R>, mut rx: UnboundedRece
                             Ok(response) => {
                                 let response_pb = response.into_inner();
                                 let response = RequestVoteResponse::from_pb(&response_pb);
-                                handle_clone.request_vote_response(response);
+                                // It's fine if the core doesn't accept this response because it's in a bad state anyway.
+                                let _ = handle_clone.request_vote_response(response);
                             }
 
                             Err(e) => {

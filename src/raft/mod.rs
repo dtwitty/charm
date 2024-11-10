@@ -1,7 +1,6 @@
 use self::core::node::run_core;
 use crate::raft::core::config::RaftConfig;
 use crate::raft::core::error::RaftCoreError;
-use crate::raft::core::error::RaftCoreError::NotReady;
 use crate::raft::core::handle::RaftCoreHandle;
 #[cfg(not(feature = "turmoil"))]
 use crate::raft::core::storage::sqlite::SqliteCoreStorage;
@@ -46,7 +45,7 @@ impl<R: Send + 'static> RaftHandle<R> {
         // Propose returns a nested result. If the outer result is an error, it means the
         // core was not ready. If the inner result is an error, it means the proposal was
         // not committed.
-        self.core_handle.propose(proposal).await.unwrap_or_else(|_| Err(NotReady))
+        self.core_handle.propose(proposal).await
     }
 }
 

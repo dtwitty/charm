@@ -1,10 +1,10 @@
 use crate::raft::core::error::RaftCoreError;
+use crate::raft::core::error::RaftCoreError::NotReady;
 use crate::raft::core::queue::CoreQueueEntry;
 use crate::raft::messages::{AppendEntriesRequest, AppendEntriesResponse, RequestVoteRequest, RequestVoteResponse};
 use crate::raft::types::NodeId;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
-use tokio::sync::oneshot::Receiver;
 use tracing::{instrument, Span};
 
 #[derive(Debug)]
@@ -35,48 +35,54 @@ impl<R: Send + 'static> RaftCoreHandle<R> {
     }
 
     #[instrument(skip(self))]
-    pub fn append_entries_request(&self, request: AppendEntriesRequest) -> Receiver<AppendEntriesResponse> {
+    pub async fn append_entries_request(&self, request: AppendEntriesRequest) -> Result<AppendEntriesResponse, RaftCoreError> {
         let (response_tx, rx) = oneshot::channel();
         let entry = CoreQueueEntry::AppendEntriesRequest {
             request,
             response_tx,
         };
-        self.tx.send(entry).unwrap();
-        rx
+        if let Err(e) = self.tx.send(entry) {
+            let _ = e.0.respond_err(NotReady);
+        }
+        rx.await.map_err(|_| NotReady)?
     }
 
     #[instrument(skip(self))]
-    pub fn request_vote_request(&self, request: RequestVoteRequest) -> Receiver<RequestVoteResponse> {
+    pub async fn request_vote_request(&self, request: RequestVoteRequest) -> Result<RequestVoteResponse, RaftCoreError> {
         let (response_tx, rx) = oneshot::channel();
         let entry = CoreQueueEntry::RequestVoteRequest {
             request,
             response_tx,
         };
-        self.tx.send(entry).unwrap();
-        rx
+        if let Err(e) = self.tx.send(entry) {
+            let _ = e.0.respond_err(NotReady);
+        }
+        rx.await.map_err(|_| NotReady)?
     }
 
     #[instrument(skip(self))]
-    pub fn append_entries_response(&self, response: AppendEntriesResponse) {
+    pub fn append_entries_response(&self, response: AppendEntriesResponse) -> Result<(), RaftCoreError> {
         let entry = CoreQueueEntry::AppendEntriesResponse(response);
-        self.tx.send(entry).unwrap();
+        self.tx.send(entry).map_err(|_| NotReady)
     }
 
     #[instrument(skip(self))]
-    pub fn request_vote_response(&self, response: RequestVoteResponse) {
+    pub fn request_vote_response(&self, response: RequestVoteResponse) -> Result<(), RaftCoreError> {
         let entry = CoreQueueEntry::RequestVoteResponse(response);
-        self.tx.send(entry).unwrap();
+        self.tx.send(entry).map_err(|_| NotReady)
     }
 
     #[instrument(skip_all)]
-    pub fn propose(&self, proposal: R) -> Receiver<Result<(), RaftCoreError>> {
+    pub async fn propose(&self, proposal: R) -> Result<(), RaftCoreError> {
         let (commit_tx, rx) = oneshot::channel();
         let entry = CoreQueueEntry::Propose {
             request: proposal,
             commit_tx,
             span: Span::current(),
         };
-        self.tx.send(entry).unwrap();
-        rx
+        if let Err(e) = self.tx.send(entry) {
+            let _ = e.0.respond_err(NotReady);
+        }
+        rx.await.map_err(|_| NotReady)?
     }
 }
