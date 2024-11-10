@@ -286,8 +286,8 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         self.role = Candidate(candidate_state);
 
         // Send RequestVoteRequests to all nodes.
-        let last_log_index = self.get_log_storage().last_index().await.unwrap();
-        let last_log_term = self.get_log_storage().last_log_term().await.unwrap();
+        let last_log_index = self.get_log_storage().last_index().await;
+        let last_log_term = self.get_log_storage().last_log_term().await;
         let req = RequestVoteRequest {
             term: next_term,
             candidate_id: self.node_id().clone(),
@@ -338,11 +338,11 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             debug!("Append entries from start of the log. Accepting request.");
 
             // Truncate the log in case there are any entries.
-            self.get_log_storage().truncate(Index(0)).await.unwrap();
+            self.get_log_storage().truncate(Index(0)).await;
 
             let mut last_index = Index(0);
             for entry in req.entries {
-                last_index = self.get_log_storage().append(entry).await.unwrap();
+                last_index = self.get_log_storage().append(entry).await;
             }
             
             self.commit_index = req.leader_commit.min(last_index);
@@ -354,10 +354,10 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             return self.append_entries_response(true).await;
         }
 
-        let prev_log_entry = self.get_log_storage().get(req.prev_log_index).await.unwrap();
+        let prev_log_entry = self.get_log_storage().get(req.prev_log_index).await;
         if prev_log_entry.is_none() {
             // We don't have the previous log entry.
-            let last_index = self.get_log_storage().last_index().await.unwrap();
+            let last_index = self.get_log_storage().last_index().await;
             warn!("Append request claimed log index {:?}, but we only have up to index {:?}.", req.prev_log_index, last_index);
             return self.append_entries_response(false).await;
         }
@@ -375,7 +375,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         self.check_and_append(req.entries, req.prev_log_index.next()).await;
 
         if req.leader_commit > self.commit_index {
-            let last_index = self.get_log_storage().last_index().await.unwrap();
+            let last_index = self.get_log_storage().last_index().await;
             self.commit_index = req.leader_commit.min(last_index);
         }
         debug!("Commit index is now {:?}.", self.commit_index);
@@ -387,20 +387,20 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
 
     async fn check_and_append(&mut self, entries: Vec<LogEntry>, mut prev_log_index: Index) {
         for entry in entries {
-            if let Some(prev_entry) = self.get_log_storage().get(prev_log_index).await.unwrap() {
+            if let Some(prev_entry) = self.get_log_storage().get(prev_log_index).await {
                 if prev_entry.term != entry.term {
                     // There is a conflict. Truncate the log and append the new entry.
                     warn!("Log conflict detected at index {:?}. Request has term {:?} but we have term {:?}. Truncating log.", prev_log_index, entry.term, prev_entry.term);
-                    self.get_log_storage().truncate(prev_log_index).await.unwrap();
+                    self.get_log_storage().truncate(prev_log_index).await;
 
                     // The log has cleared the bad entry and everything after it.
                     // Now we can append the new entry.
-                    self.get_log_storage().append(entry).await.unwrap();
+                    self.get_log_storage().append(entry).await;
                 }
             // Nothing to do - the entry already matches!
             } else {
                 // No conflict, append the entry.
-                self.get_log_storage().append(entry).await.unwrap();
+                self.get_log_storage().append(entry).await;
             }
 
             prev_log_index = prev_log_index.next();
@@ -412,7 +412,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             node_id: self.node_id().clone(),
             term: self.get_current_term().await,
             success,
-            last_log_index: self.get_log_storage().last_index().await.unwrap(),
+            last_log_index: self.get_log_storage().last_index().await
         }
     }
 
@@ -427,7 +427,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         }
 
         // Run this here to appease the borrow checker.
-        let last_index = self.get_log_storage().last_index().await.unwrap();
+        let last_index = self.get_log_storage().last_index().await;
 
         // If we are not the leader, we don't care about these responses.
         if let Leader(ref mut leader_state) = self.role {
@@ -478,7 +478,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         }
 
         // Check last entry terms.
-        let our_last_log_term = self.get_log_storage().last_log_term().await.unwrap();
+        let our_last_log_term = self.get_log_storage().last_log_term().await;
         let candidate_last_log_term = req.last_log_term;
         if candidate_last_log_term > our_last_log_term {
             // The candidate has a higher term, so we approve!
@@ -488,7 +488,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         }
 
         // If the terms are the same, we need to check the log lengths.
-        let our_last_log_index = self.get_log_storage().last_index().await.unwrap();
+        let our_last_log_index = self.get_log_storage().last_index().await;
         let candidate_last_log_index = req.last_log_index;
         if candidate_last_log_index >= our_last_log_index {
             // The candidate has at least as much log as we do, so we approve!
@@ -572,7 +572,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
             term: current_term,
             data: Data(serialized_data),
         };
-        let index = self.get_log_storage().append(log_entry).await.unwrap();
+        let index = self.get_log_storage().append(log_entry).await;
         if let Leader(ref mut leader_state) = self.role {
                 debug!("Proposal appended to log at index {:?}.", index);
             leader_state.proposals.insert(index, proposal);
@@ -585,7 +585,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
         let mut peer_states = HashMap::new();
 
         for node_id in &self.config.other_nodes {
-            let next_index = self.get_log_storage().last_index().await.unwrap().next();
+            let next_index = self.get_log_storage().last_index().await.next();
             let match_index = Index(0);
             peer_states.insert(node_id.clone(), PeerState { next_index, match_index });
         }
@@ -617,10 +617,9 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
                 .get_log_storage()
                 .get(prev_log_index)
                 .await
-                .unwrap()
                 .map_or(Term(0), |entry| entry.term);
 
-            let entries = self.get_log_storage().entries_from(next_index).await.unwrap();
+            let entries = self.get_log_storage().entries_from(next_index).await;
 
             let req = AppendEntriesRequest {
                 term: self.get_current_term().await,
@@ -696,7 +695,7 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
                 }
             }
 
-            let entry = self.get_log_storage().get(self.last_applied).await.unwrap().unwrap();
+            let entry = self.get_log_storage().get(self.last_applied).await.unwrap();
             let req: R = serde_json::from_slice(&entry.data.0).unwrap();
             let leader_info: I = serde_json::from_slice(&entry.leader_info).unwrap();
             let raft_info = RaftInfo {
@@ -735,19 +734,19 @@ impl<R: Serialize + DeserializeOwned + Send + 'static, S: CoreStorage, I: Clone 
     }
 
     async fn get_current_term(&self) -> Term {
-        self.storage.current_term().await.expect("failed to get current term")
+        self.storage.current_term().await
     }
 
     async fn set_current_term(&self, term: Term) {
-        self.storage.set_current_term(term).await.expect("failed to set current term")
+        self.storage.set_current_term(term).await
     }
 
     async fn get_voted_for(&self) -> Option<NodeId> {
-        self.storage.voted_for().await.expect("failed to get voted for")
+        self.storage.voted_for().await
     }
 
     async fn set_voted_for(&self, candidate_id: Option<NodeId>) {
-        self.storage.set_voted_for(candidate_id).await.expect("failed to set voted for")
+        self.storage.set_voted_for(candidate_id).await
     }
 
     fn get_log_storage(&self) -> S::LogStorage {

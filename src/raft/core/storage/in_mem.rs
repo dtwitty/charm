@@ -24,75 +24,73 @@ impl InMemLogStorage {
 
 #[async_trait]
 impl LogStorage for InMemLogStorage {
-    type ErrorType = ();
-
-    async fn append(&self, entry: LogEntry) -> Result<Index, Self::ErrorType> {
+    async fn append(&self, entry: LogEntry) -> Index {
         let lock = self.entries.write();
         let mut entries = lock.unwrap();
         entries.push(entry);
         let index = entries.len() as u64;
-        Ok(Index(index))
+        Index(index)
     }
 
-    async fn get(&self, index: Index) -> Result<Option<LogEntry>, Self::ErrorType> {
+    async fn get(&self, index: Index) -> Option<LogEntry> {
         if index.0 == 0 {
-            return Ok(None);
+            return None;
         }
         let index = index.0 as usize - 1;
 
         let lock = self.entries.read();
         let entries = lock.unwrap();
         if index < entries.len() {
-            Ok(Some(entries[index].clone()))
+            Some(entries[index].clone())
         } else {
-            Ok(None)
+            None
         }
     }
 
-    async fn last_index(&self) -> Result<Index, Self::ErrorType> {
+    async fn last_index(&self) -> Index {
         let lock = self.entries.read();
         let entries = lock.unwrap();
-        Ok(Index(entries.len() as u64))
+        Index(entries.len() as u64)
     }
 
-    async fn last_log_term(&self) -> Result<Term, Self::ErrorType> {
+    async fn last_log_term(&self) -> Term {
         let lock = self.entries.read();
         let entries = lock.unwrap();
         if let Some(entry) = entries.last() {
-            Ok(entry.term)
+            entry.term
         } else {
-            Ok(Term(0))
+            Term(0)
         }
     }
 
-    async fn entries_from(&self, index: Index) -> Result<Vec<LogEntry>, Self::ErrorType> {
+    async fn entries_from(&self, index: Index) -> Vec<LogEntry> {
         let lock = self.entries.read();
         let entries = lock.unwrap();
 
         if index.0 == 0 {
-            return Ok(entries.clone());
+            return entries.clone();
         }
 
         let index = index.0 as usize - 1;
         if index < entries.len() {
-            Ok(entries[index..].to_vec())
+            entries[index..].to_vec()
         } else {
-            Ok(Vec::new())
+            Vec::new()
         }
     }
 
-    async fn truncate(&self, index: Index) -> Result<(), Self::ErrorType> {
+    async fn truncate(&self, index: Index) -> () {
         let lock = self.entries.write();
         let mut entries = lock.unwrap();
 
         if index.0 == 0 {
             entries.clear();
-            return Ok(());
+            return ();
         }
 
         let index = index.0 as usize - 1;
         entries.truncate(index);
-        Ok(())
+        ()
     }
 }
 
@@ -142,26 +140,26 @@ impl CoreStorage for InMemStorage {
     type LogStorage = InMemLogStorage;
     type ErrorType = ();
 
-    async fn current_term(&self) -> Result<Term, Self::ErrorType> {
+    async fn current_term(&self) -> Term {
         let inner = self.inner.read().unwrap();
-        Ok(inner.current_term)
+        inner.current_term
     }
 
-    async fn set_current_term(&self, term: Term) -> Result<(), Self::ErrorType> {
+    async fn set_current_term(&self, term: Term) -> () {
         let mut inner = self.inner.write().unwrap();
         inner.current_term = term;
-        Ok(())
+        ()
     }
 
-    async fn voted_for(&self) -> Result<Option<NodeId>, Self::ErrorType> {
+    async fn voted_for(&self) -> Option<NodeId> {
         let inner = self.inner.read().unwrap();
-        Ok(inner.voted_for.clone())
+        inner.voted_for.clone()
     }
 
-    async fn set_voted_for(&self, candidate_id: Option<NodeId>) -> Result<(), Self::ErrorType> {
+    async fn set_voted_for(&self, candidate_id: Option<NodeId>) -> () {
         let mut inner = self.inner.write().unwrap();
         inner.voted_for = candidate_id;
-        Ok(())
+        ()
     }
 
     fn log_storage(&self) -> Self::LogStorage {
@@ -176,17 +174,17 @@ mod core_storage_tests {
     #[tokio::test]
     async fn test_in_mem_storage() {
         let storage = InMemStorage::new();
-        assert_eq!(storage.current_term().await.unwrap(), Term(0));
-        assert_eq!(storage.voted_for().await.unwrap(), None);
+        assert_eq!(storage.current_term().await, Term(0));
+        assert_eq!(storage.voted_for().await, None);
 
-        storage.set_current_term(Term(1)).await.unwrap();
-        assert_eq!(storage.current_term().await.unwrap(), Term(1));
+        storage.set_current_term(Term(1)).await;
+        assert_eq!(storage.current_term().await, Term(1));
 
         storage.set_voted_for(Some(NodeId {
             host: "node1".to_string(),
             port: 1234,
-        })).await.unwrap();
-        assert_eq!(storage.voted_for().await.unwrap(), Some(NodeId {
+        })).await;
+        assert_eq!(storage.voted_for().await, Some(NodeId {
             host: "node1".to_string(),
             port: 1234,
         }));

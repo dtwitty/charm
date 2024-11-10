@@ -37,57 +37,58 @@ impl SqliteLogStorage {
 
 #[async_trait]
 impl LogStorage for SqliteLogStorage {
-    type ErrorType = anyhow::Error;
-
-    async fn append(&self, entry: LogEntry) -> Result<Index, Self::ErrorType> {
-        let mut tx = self.pool.begin().await?;
+    async fn append(&self, entry: LogEntry) -> Index {
+        let mut tx = self.pool.begin().await.unwrap();
         sqlx::query("INSERT INTO log (leader_info, term, data) VALUES (?, ?, ?, ?)")
             .bind(entry.leader_info)
             .bind(entry.term.0 as i64)
             .bind(entry.data.0)
             .execute(&mut *tx)
-            .await?;
+            .await
+            .unwrap();
 
         let id: i64 = sqlx::query_scalar("SELECT last_insert_rowid()")
             .fetch_one(&mut *tx)
-            .await?;
+            .await
+            .unwrap();
 
-        tx.commit().await?;
+        tx.commit().await.unwrap();
 
-        Ok(Index(id as u64))
+        Index(id as u64)
     }
 
-    async fn get(&self, index: Index) -> Result<Option<LogEntry>, Self::ErrorType> {
+    async fn get(&self, index: Index) -> Option<LogEntry> {
         let entry = sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>)>("SELECT leader_info, term, data FROM log WHERE id = ?")
             .bind(index.0 as i64)
             .fetch_optional(&self.pool)
-            .await?;
+            .await
+            .unwrap();
 
-        Ok(entry.map(|(leader_info, term, data)| LogEntry {
+        entry.map(|(leader_info, term, data)| LogEntry {
             leader_info,
             term: Term(term as u64),
             data: Data(data),
-        }))
+        })
     }
 
-    async fn last_index(&self) -> Result<Index, Self::ErrorType> {
+    async fn last_index(&self) -> Index {
         sqlx::query_scalar("SELECT MAX(id) FROM log")
             .fetch_one(&self.pool)
             .await
             .map(|id: Option<i64>| Index(id.unwrap_or(0) as u64))
-            .map_err(Into::into)
+            .unwrap()
     }
 
-    async fn last_log_term(&self) -> Result<Term, Self::ErrorType> {
+    async fn last_log_term(&self) -> Term {
         sqlx::query_scalar("SELECT term FROM log ORDER BY id DESC LIMIT 1")
             .fetch_optional(&self.pool)
             .await
             .map(|o| o.unwrap_or(0))
             .map(|term: i64| Term(term as u64))
-            .map_err(Into::into)
+            .unwrap()
     }
 
-    async fn entries_from(&self, index: Index) -> Result<Vec<LogEntry>, Self::ErrorType> {
+    async fn entries_from(&self, index: Index) -> Vec<LogEntry> {
         sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>)>("SELECT leader_info, term, data FROM log WHERE id >= ?")
             .bind(index.0 as i64)
             .fetch_all(&self.pool)
@@ -99,16 +100,15 @@ impl LogStorage for SqliteLogStorage {
                     data: Data(data),
                 }).collect()
             })
-            .map_err(Into::into)
+            .unwrap()
     }
 
-    async fn truncate(&self, index: Index) -> Result<(), Self::ErrorType> {
+    async fn truncate(&self, index: Index) -> () {
         sqlx::query("DELETE FROM log WHERE id >= ?")
             .bind(index.0 as i64)
             .execute(&self.pool)
-            .await?;
-
-        Ok(())
+            .await
+            .unwrap();
     }
 }
 
@@ -146,13 +146,13 @@ mod log_storage_tests {
                 data: Data(b"world".to_vec()),
             };
 
-            storage.append(entry1.clone()).await.unwrap();
-            storage.append(entry2.clone()).await.unwrap();
+            storage.append(entry1.clone()).await;
+            storage.append(entry2.clone()).await;
         }
 
         let storage = SqliteLogStorage::new(filename).await.unwrap();
-        assert!(storage.get(Index(1)).await.unwrap().is_some());
-        assert!(storage.get(Index(2)).await.unwrap().is_some());
+        assert!(storage.get(Index(1)).await.is_some());
+        assert!(storage.get(Index(2)).await.is_some());
     }
 }
 
@@ -205,47 +205,49 @@ impl CoreStorage for SqliteCoreStorage {
     type LogStorage = SqliteLogStorage;
     type ErrorType = anyhow::Error;
 
-    async fn current_term(&self) -> Result<Term, Self::ErrorType> {
+    async fn current_term(&self) -> Term {
         sqlx::query_scalar("SELECT current_term FROM state")
             .fetch_one(&self.pool)
             .await
             .map(|term: i64| Term(term as u64))
-            .map_err(Into::into)
+            .unwrap()
     }
 
-    async fn set_current_term(&self, term: Term) -> Result<(), Self::ErrorType> {
+    async fn set_current_term(&self, term: Term) -> () {
         sqlx::query("UPDATE state SET current_term = ?")
             .bind(term.0 as i64)
             .execute(&self.pool)
             .await
             .map(|_| ())
-            .map_err(Into::into)
+            .unwrap()
     }
 
-    async fn voted_for(&self) -> Result<Option<NodeId>, Self::ErrorType> {
+    async fn voted_for(&self) -> Option<NodeId> {
         let (host, port): (Option<String>, Option<i64>) =
             sqlx::query_as("SELECT voted_for_host, voted_for_port FROM state")
                 .fetch_one(&self.pool)
-                .await?;
+                .await
+                .unwrap()
+            ;
 
         if let (Some(host), Some(port)) = (host, port) {
-            Ok(Some(NodeId {
+            Some(NodeId {
                 host,
                 port: port as u16,
-            }))
+            })
         } else {
-            Ok(None)
+            None
         }
     }
 
-    async fn set_voted_for(&self, candidate_id: Option<NodeId>) -> Result<(), Self::ErrorType> {
+    async fn set_voted_for(&self, candidate_id: Option<NodeId>) -> () {
         sqlx::query("UPDATE state SET voted_for_host = ?, voted_for_port = ?")
             .bind(candidate_id.as_ref().map(|id| &id.host))
             .bind(candidate_id.as_ref().map(|id| id.port as i64))
             .execute(&self.pool)
             .await
             .map(|_| ())
-            .map_err(Into::into)
+            .unwrap()
     }
 
     fn log_storage(&self) -> Self::LogStorage {
@@ -272,17 +274,17 @@ mod core_storage_tests {
         {
             let storage = SqliteCoreStorage::new(state_filename, log_filename).await.unwrap();
 
-            assert_eq!(storage.current_term().await.unwrap(), Term(0));
-            assert_eq!(storage.voted_for().await.unwrap(), None);
+            assert_eq!(storage.current_term().await, Term(0));
+            assert_eq!(storage.voted_for().await, None);
 
-            storage.set_current_term(Term(1)).await.unwrap();
-            assert_eq!(storage.current_term().await.unwrap(), Term(1));
+            storage.set_current_term(Term(1)).await;
+            assert_eq!(storage.current_term().await, Term(1));
 
             storage.set_voted_for(Some(NodeId {
                 host: "node1".to_string(),
                 port: 1234,
-            })).await.unwrap();
-            assert_eq!(storage.voted_for().await.unwrap(), Some(NodeId {
+            })).await;
+            assert_eq!(storage.voted_for().await, Some(NodeId {
                 host: "node1".to_string(),
                 port: 1234,
             }));
@@ -292,8 +294,8 @@ mod core_storage_tests {
         {
             let storage = SqliteCoreStorage::new(state_filename, log_filename).await.unwrap();
 
-            assert_eq!(storage.current_term().await.unwrap(), Term(1));
-            assert_eq!(storage.voted_for().await.unwrap(), Some(NodeId {
+            assert_eq!(storage.current_term().await, Term(1));
+            assert_eq!(storage.voted_for().await, Some(NodeId {
                 host: "node1".to_string(),
                 port: 1234,
             }));

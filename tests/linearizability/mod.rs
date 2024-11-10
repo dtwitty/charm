@@ -2,6 +2,7 @@
 
 use charm::charm::pb::{DeleteResponse, GetResponse, PutResponse, ResponseHeader};
 use dashmap::DashMap;
+use itertools::Itertools;
 use stateright::semantics::{ConsistencyTester, LinearizabilityTester, SequentialSpec};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -179,41 +180,23 @@ impl CharmHistory {
         self.tester.lock().unwrap().serialized_history()
     }
 
-    pub fn history_by_raft_time(&self) -> Vec<(u64, usize, CharmReq, CharmResp)> {
-        let mut v = Vec::new();
-        self.client_histories.iter().for_each(|r| {
+    pub fn print_history(&self) {
+        self.client_histories
+            .iter()
+            .sorted_by_key(|x| *x.key())
+            .for_each(|r| {
             let client_num = r.key().clone();
+                println!("Client {}", client_num);
             let client_history = r.value().lock().unwrap();
-            client_history.history().chunks(2).enumerate().for_each(|(i, chunk)| {
-                if chunk.len() != 2 {
-                    panic!("Got a malformed request-response: {:?}", chunk);
+                for event in client_history.history() {
+                    match event {
+                        CharmReqResp::Req(req) => print!("  Request {:?}", req),
+                        CharmReqResp::Resp(resp) => println!(" returns {:?}", resp),
                 }
-
-                let req = chunk[0].clone();
-                let resp = chunk[1].clone();
-
-                match (req, resp) {
-                    (CharmReqResp::Req(req), CharmReqResp::Resp(resp)) => {
-                        v.push((client_num, i, req, resp));
-                    }
-                    _ => panic!("Got a malformed request-response: {:?}", chunk),
                 }
             });
-        });
-
-        v.sort_by_key(|(client_num, seq_num, _, resp)| {
-            let response_header = match resp {
-                CharmResp::Get(resp) => resp.response_header.clone().unwrap(),
-                CharmResp::Put(resp) => resp.response_header.clone().unwrap(),
-                CharmResp::Delete(resp) => resp.response_header.clone().unwrap(),
-            };
-
-            (response_header.raft_term, response_header.raft_index, client_num.clone(), seq_num.clone())
-        });
-
-        v
     }
-}
+    }
 #[derive(Debug, Clone, PartialEq)]
 pub enum CharmReqResp {
     Req(CharmReq),

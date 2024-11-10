@@ -14,16 +14,16 @@ pub mod tests {
     use std::fs::{create_dir_all, remove_dir_all};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
-    use tracing::{error, info, warn};
+    use tracing::{enabled, error, info, warn};
     use turmoil::Sim;
     use wyrand::WyRand;
 
     #[test]
     fn test_charm() {
-        let bad_seed = (0..10000)
+        let bad_seed = (0..100000)
             .into_par_iter()
             .find_any(|seed| {
-                matches!(test_one(*seed), Err(_))
+                matches!(test_one(*seed, false), Err(_))
             });
         if let Some(b) = bad_seed {
             let msg = format!("seed {b} failed");
@@ -34,13 +34,13 @@ pub mod tests {
     #[test]
     #[cfg(feature = "turmoil")]
     fn test_seed() -> turmoil::Result {
-        let seed = 3694;
+        let seed = 7308;
         configure_tracing();
-        test_one(seed)
+        test_one(seed, true)
     }
 
     #[tracing::instrument()]
-    fn test_one(seed: u64) -> turmoil::Result {
+    fn test_one(seed: u64, print_history_on_error: bool) -> turmoil::Result {
         // The simulation uses this seed.
         let mut sim = turmoil::Builder::new()
             .simulation_duration(Duration::from_secs(5 * 60))
@@ -54,13 +54,13 @@ pub mod tests {
         let mut seed_gen = WyRand::new(seed);
 
         // Run a cluster of 3 nodes.
-        let num_nodes = 3;
+        let num_nodes = 5;
         run_cluster(seed, &mut sim, &mut seed_gen, num_nodes);
 
         let history = CharmHistory::new();
 
         // Run 3 clients...
-        let num_clients = 3;
+        let num_clients = 2;
         for c in 0..num_clients {
             let client_name = format!("client{c}");
             let client_history = history.for_client(c);
@@ -100,10 +100,12 @@ pub mod tests {
 
         // Check that the history is linearizable.
         history.linearize().ok_or_else(|| {
-            error!("history is not linearizable! Printing approximate history.");
-            history.history_by_raft_time().iter().for_each(|(c, s, req, resp)| {
-                error!("{c:?}({s:?}): {req:?} -> {resp:?}");
-            });
+            if print_history_on_error {
+                error!("history is not linearizable! Printing history.");
+                if enabled!(tracing::Level::ERROR) {
+                    history.print_history();
+                }
+            }
             "history is not linearizable".into()
         }).map(|_| ())
     }
@@ -120,7 +122,7 @@ pub mod tests {
         let client = EasyCharmClient::new(format!("http://{host}:12345"), retry_strategy)?;
         let mut sleep_dist = RandomDuration::new(client_rng.clone(), Duration::from_millis(250), Duration::from_millis(10));
 
-        for k in 0..4 {
+        for k in 0..3 {
             let i = client_rng.next_u64() % 3;
             let key = format!("key{}", client_rng.next_u64() % 1);
             match i {
@@ -217,7 +219,7 @@ pub mod tests {
     fn configure_tracing() {
         tracing::subscriber::set_global_default(
             tracing_subscriber::fmt()
-                .with_env_filter("info,charm::charm=debug,charm::raft::core::node=debug,charm::raft::state_machine=debug")
+                .with_env_filter("info,charm::charm=debug")
                 .with_timer(SimElapsedTime)
                 .finish(),
         )
